@@ -124,9 +124,9 @@ class CandidateDataset(Dataset):
     Candidate Dataset for:
         query_tokens, candidate_tokens, label
     """
-    def __init__(self, queries, dicts, tokenizer, max_length, topk, d_ratio, s_score_matrix, s_candidate_idxs):
+    def __init__(self, queries, dicts, tokenizer, max_length, topk, s_score_matrix, s_candidate_idxs):
         """
-        Retrieve top-k candidates based on sparse/dense embedding
+        Retrieve top-k candidates based on dense embedding
         Parameters
         ----------
         queries : list
@@ -137,18 +137,15 @@ class CandidateDataset(Dataset):
             A BERT tokenizer for dense embedding
         topk : int
             The number of candidates
-        d_ratio : float
-            The ratio of dense candidates from top-k
         s_score_matrix : np.array
         s_candidate_idxs : np.array
         """
-        LOGGER.info("CandidateDataset! len(queries)={} len(dicts)={} topk={} d_ratio={}".format(
-            len(queries),len(dicts), topk, d_ratio))
+        LOGGER.info("CandidateDataset! len(queries)={} len(dicts)={} topk={} ".format(
+            len(queries),len(dicts), topk))
         self.query_names, self.query_ids = [row[0] for row in queries], [row[1] for row in queries]
         self.dict_names, self.dict_ids = [row[0] for row in dicts], [row[1] for row in dicts]
         self.topk = topk
-        self.n_dense = int(topk * d_ratio)
-        self.n_sparse = topk - self.n_dense
+        self.n_dense = int(topk)
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -167,19 +164,7 @@ class CandidateDataset(Dataset):
         query_name = self.query_names[query_idx]
         query_token = self.tokenizer(query_name, max_length=self.max_length, padding='max_length', truncation=True, return_tensors='pt')
 
-        # combine sparse and dense candidates as many as top-k
-        s_candidate_idx = self.s_candidate_idxs[query_idx]
-        d_candidate_idx = self.d_candidate_idxs[query_idx]
-        
-        # fill with sparse candidates first
-        topk_candidate_idx = s_candidate_idx[:self.n_sparse]
-        
-        # fill remaining candidates with dense
-        for d_idx in d_candidate_idx:
-            if len(topk_candidate_idx) >= self.topk:
-                break
-            if d_idx not in topk_candidate_idx:
-                topk_candidate_idx = np.append(topk_candidate_idx,d_idx)
+        topk_candidate_idx = self.d_candidate_idxs[query_idx]
         
         # sanity check
         assert len(topk_candidate_idx) == self.topk
