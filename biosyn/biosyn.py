@@ -1,70 +1,50 @@
-import os
-import pickle
-import logging
-import torch
-import numpy as np
-import time
+
+import torch 
 from tqdm import tqdm
-from torch import nn
-from torch.utils.data.dataloader import DataLoader
-from transformers import (
-    AutoTokenizer,
-    AutoModel,
-    default_data_collator
-)
+import numpy as np
+from torch.utils.data import DataLoader
+from transformers import default_data_collator, AutoModel, AutoTokenizer
 
-LOGGER = logging.getLogger()
 
-class NamesDataset(torch.utils.data.Dataset):
-    def __init__(self, encodings):
-        self.encodings = encodings
+from .dataloader import NamesDataset
 
-    def __getitem__(self, idx):
-        return {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-
-    def __len__(self):
-        return len(self.encodings.input_ids)
 
 class BioSyn(object):
-    """
-    Wrapper class for dense encoder 
-    """
-
     def __init__(self, max_length, use_cuda):
         self.max_length = max_length
         self.use_cuda = use_cuda
-        self.tokenizer = None
         self.encoder = None
+        self.tokenizer = None
 
 
     def get_dense_encoder(self):
         assert (self.encoder is not None)
-
+        
         return self.encoder
 
     def get_dense_tokenizer(self):
         assert (self.tokenizer is not None)
-
+        
         return self.tokenizer
 
     def save_model(self, path):
         # save dense encoder
         self.encoder.save_pretrained(path)
         self.tokenizer.save_pretrained(path)
-        logging.info("Model saved in saved in {}".format(path))
 
     def load_model(self, model_name_or_path):
         self.load_dense_encoder(model_name_or_path)
         return self
 
-    def load_dense_encoder(self, model_name_or_path):
-        self.encoder = AutoModel.from_pretrained(model_name_or_path)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+
+    def load_dense_encoder(self, model_name_path):
+        self.encoder = AutoModel.from_pretrained(model_name_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_path)
         if self.use_cuda:
             self.encoder = self.encoder.to("cuda")
-
         return self.encoder, self.tokenizer
-    
+
+
     def get_score_matrix(self, query_embeds, dict_embeds):
         """
         Return score matrix
@@ -82,7 +62,8 @@ class BioSyn(object):
         score_matrix = np.matmul(query_embeds, dict_embeds.T)
         
         return score_matrix
-
+    
+    
     def retrieve_candidate(self, score_matrix, topk):
         """
         Return sorted topk idxes (descending order)
@@ -112,7 +93,7 @@ class BioSyn(object):
 
         return topk_idxs
 
-    def embed_dense(self, names, show_progress=False):
+    def embed_dense(self, names):
         """
         Embedding data into dense representations
 
@@ -126,13 +107,11 @@ class BioSyn(object):
         dense_embeds : list
             A list of dense embeddings
         """
-        self.encoder.eval() # prevent dropout
-        
-        batch_size=1024
+        self.encoder.eval()
+        batch_size = 1024
         dense_embeds = []
-
         if isinstance(names, np.ndarray):
-            names = names.tolist()        
+            names = names.tolist()
         name_encodings = self.tokenizer(names, padding="max_length", max_length=self.max_length, truncation=True, return_tensors="pt")
         if self.use_cuda:
             name_encodings = name_encodings.to('cuda')
@@ -140,10 +119,9 @@ class BioSyn(object):
         name_dataloader = DataLoader(name_dataset, shuffle=False, collate_fn=default_data_collator, batch_size=batch_size)
 
         with torch.no_grad():
-            for batch in tqdm(name_dataloader, disable=not show_progress, desc='embedding dictionary'):
+            for batch in tqdm(name_dataloader, desc='embedding dictionary'):
                 outputs = self.encoder(**batch)
                 batch_dense_embeds = outputs[0][:,0].cpu().detach().numpy() # [CLS] representations
                 dense_embeds.append(batch_dense_embeds)
         dense_embeds = np.concatenate(dense_embeds, axis=0)
-        
         return dense_embeds

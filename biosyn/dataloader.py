@@ -1,130 +1,61 @@
-import re
-import os
-import glob
-import numpy as np
-from torch.utils.data import Dataset
 import logging
+import torch
+from torch.utils.data import Dataset
 from tqdm import tqdm
+import numpy as np
+import glob
+import os
+
 LOGGER = logging.getLogger(__name__)
 
 
-class QueryDataset(Dataset):
+def load_dictionary(dict_path):
+    LOGGER.info(f"Loading dictionary dataset! dictionary path={dict_path}  ")
+    data = []
+    with open(dict_path, mode="r", encoding="utf-8") as f:
+        lines =  f.readlines()
+        for line in tqdm(lines):
+            line = line.strip()
+            if line == "": continue
+            cui, name  = line.split("||")
+            data.append((name, cui))
+        data = np.array(data)
+        return data
 
-    def __init__(self, data_dir, 
-                filter_composite=False,
-                filter_duplicate=False,
-                filter_cuiless=False
-        ):
-        """       
-        Parameters
-        ----------
-        data_dir : str
-            a path of data
-        filter_composite : bool
-            filter composite mentions
-        filter_duplicate : bool
-            filter duplicate queries
-        draft : bool
-            use subset of queries for debugging (default False)     
-        """
-        LOGGER.info("QueryDataset! data_dir={} filter_composite={} filter_duplicate={} filter_cuiless={}".format(
-            data_dir, filter_composite, filter_duplicate, filter_cuiless
-        ))
-        
-        self.data = self.load_data(
-            data_dir=data_dir,
-            filter_composite=filter_composite,
-            filter_duplicate=filter_duplicate,
-            filter_cuiless=filter_cuiless
-        )
-        
-    def load_data(self, data_dir, filter_composite, filter_duplicate, filter_cuiless):
-        """       
-        Parameters
-        ----------
-        data_dir : str
-            a path of data
-        filter_composite : bool
-            filter composite mentions
-        filter_duplicate : bool
-            filter duplicate queries  
-        filter_cuiless : bool
-            remove samples with cuiless 
-        Returns
-        -------
-        data : np.array 
-            mention, cui pairs
-        """
-        data = []
-
-        concept_files = glob.glob(os.path.join(data_dir, "*.concept"))
-        for concept_file in tqdm(concept_files):
-            with open(concept_file, "r", encoding='utf-8') as f:
+def load_queries(data_dir, filter_composite, filter_duplicates, filter_cuiless):
+    LOGGER.info(f"Loading query dataset! data_dir={data_dir}")
+    data = []
+    concept_files = glob.glob(os.path.join(data_dir, "*.concept"))
+    
+    for concept_file in tqdm(concept_files):
+        with open(concept_file, "r", encoding='utf-8') as f:
                 concepts = f.readlines()
+        for concept in concepts:
+            concept = concept.split("||")
+            mention = concept[3].strip()
+            cui = concept[4].strip()
+            is_composite = (cui.replace("+","|").count("|") > 0)
+            if filter_composite and is_composite:
+                continue
+            if filter_cuiless and cui == "-1":
+                continue
+            data.append((mention, cui))
+    if filter_duplicates:
+        data = list(dict.fromkeys(data))
 
-            for concept in concepts:
-                concept = concept.split("||")
-                mention = concept[3].strip()
-                cui = concept[4].strip()
-                is_composite = (cui.replace("+","|").count("|") > 0)
+    data = np.array(data)
+    return data
 
-                # filter composite cui
-                if filter_composite and is_composite:
-                    continue
-                # filter cuiless
-                if filter_cuiless and cui == '-1':
-                    continue
+class NamesDataset(torch.utils.data.Dataset):
+    def __init__(self, encodings):
+        self.encodings = encodings
+    def __getitem__(self,idx):
+        return {key: torch.tensor(val[idx]) for key,val in self.encodings.items()}
+    def __len__(self):
+        return len(self.encodings.input_ids)
 
-                data.append((mention,cui))
-        
-        if filter_duplicate:
-            data = list(dict.fromkeys(data))
-        
-        # return np.array data
-        data = np.array(data)
-        
-        return data
-
-
-class DictionaryDataset():
-    """
-    A class used to load dictionary data
-    """
-    def __init__(self, dictionary_path):
-        """
-        Parameters
-        ----------
-        dictionary_path : str
-            The path of the dictionary
-        draft : bool
-            use only small subset
-        """
-        LOGGER.info("DictionaryDataset! dictionary_path={}".format(
-            dictionary_path 
-        ))
-        self.data = self.load_data(dictionary_path)
-        
-    def load_data(self, dictionary_path):
-        name_cui_map = {}
-        data = []
-        with open(dictionary_path, mode='r', encoding='utf-8') as f:
-            lines = f.readlines()
-            for line in tqdm(lines):
-                line = line.strip()
-                if line == "": continue
-                cui, name = line.split("||")
-                data.append((name,cui))
-        
-        data = np.array(data)
-        return data
-
-
-class CandidateDataset(Dataset):
-    """
-    Candidate Dataset for:
-        query_tokens, candidate_tokens, label
-    """
-    def __init__(self, queries, dicts, tokenizer, max_length, topk, s_score_matrix, s_candidate_idxs):
+class CandidateDataset(torch.utils.data.Dataset):
+    def __init__(self, queries, dicts, tokenizer, max_length, topk):
         """
         Retrieve top-k candidates based on dense embedding
         Parameters
@@ -137,56 +68,53 @@ class CandidateDataset(Dataset):
             A BERT tokenizer for dense embedding
         topk : int
             The number of candidates
-        s_score_matrix : np.array
-        s_candidate_idxs : np.array
         """
-        LOGGER.info("CandidateDataset! len(queries)={} len(dicts)={} topk={} ".format(
-            len(queries),len(dicts), topk))
+        LOGGER.info(f"Candidatedatasets! len queries: {len(queries)}, len dicts: {len(dicts)}")
         self.query_names, self.query_ids = [row[0] for row in queries], [row[1] for row in queries]
         self.dict_names, self.dict_ids = [row[0] for row in dicts], [row[1] for row in dicts]
-        self.topk = topk
-        self.n_dense = int(topk)
-        self.tokenizer = tokenizer
+        self.tokenizer= tokenizer
         self.max_length = max_length
+        self.topk = topk
+        self.d_cand_idxs = None
 
-        self.s_score_matrix = s_score_matrix
-        self.s_candidate_idxs = s_candidate_idxs
-        self.d_candidate_idxs = None
+    def set_dense_candidate_idxs(self, d_cand_idxs):
+        self.d_cand_idxs = d_cand_idxs
 
-    def set_dense_candidate_idxs(self, d_candidate_idxs):
-        self.d_candidate_idxs = d_candidate_idxs
-    
     def __getitem__(self, query_idx):
-        assert (self.s_candidate_idxs is not None)
-        assert (self.s_score_matrix is not None)
-        assert (self.d_candidate_idxs is not None)
-
+        """
+            Return (query_tokens, cand_tokens), labels
+            query_tokens: tokenized the query_name (query_name is query_names[query_idx] the specific mention)
+            cand_tokens: 
+        """
+        assert (self.d_cand_idxs is not None)
         query_name = self.query_names[query_idx]
-        query_token = self.tokenizer(query_name, max_length=self.max_length, padding='max_length', truncation=True, return_tensors='pt')
+        # print(f"********* query name: {query_name}")
+        query_tokens = self.tokenizer(query_name, max_length=self.max_length,padding='max_length', truncation=True, return_tensors='pt' )
+        d_cand_idxs = self.d_cand_idxs[query_idx]
+        topk_candidate_idx = np.array(d_cand_idxs)
 
-        topk_candidate_idx = self.d_candidate_idxs[query_idx]
-        
-        # sanity check
         assert len(topk_candidate_idx) == self.topk
         assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
-        
-        candidate_names = [self.dict_names[candidate_idx] for candidate_idx in topk_candidate_idx]
-        candidate_s_scores = self.s_score_matrix[query_idx][topk_candidate_idx]
-        labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
 
-        candidate_tokens = self.tokenizer(candidate_names, max_length=self.max_length, padding='max_length', truncation=True, return_tensors='pt')
-        
-        return (query_token, candidate_tokens, candidate_s_scores), labels
+        cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
+        labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
+        # print(f"********* labels: {labels}")
+
+        cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
+        # print(f"********* len cand_tokens: {cand_tokens['input_ids'].shape}")
+
+        return (query_tokens, cand_tokens), labels
+
 
     def __len__(self):
         return len(self.query_names)
 
     def check_label(self, query_id, candidate_id_set):
+        """
+            check if all q_id in query_id.split("|") exists in candidate_id_set 
+        """
         label = 0
         query_ids = query_id.split("|")
-        """
-        All query ids should be included in dictionary id
-        """
         for q_id in query_ids:
             if q_id in candidate_id_set:
                 label = 1
@@ -195,7 +123,7 @@ class CandidateDataset(Dataset):
                 label = 0
                 break
         return label
-
+    
     def get_labels(self, query_idx, candidate_idxs):
         labels = np.array([])
         query_id = self.query_ids[query_idx]

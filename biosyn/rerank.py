@@ -4,33 +4,27 @@ import torch.nn.functional as F
 import torch.optim as optim
 import logging
 from tqdm import tqdm
+from utils import marginal_nll 
 LOGGER = logging.getLogger(__name__)
 
 
 class RerankNet(nn.Module):
-    def __init__(self, encoder, learning_rate, weight_decay, use_cuda):
-
-        LOGGER.info("RerankNet! learning_rate={} weight_decay={} use_cuda={}".format(
-            learning_rate,weight_decay,use_cuda
-        ))
+    def __init__(self, encoder, lr, weight_decay, use_cuda):
+        LOGGER.info(f"Reranknet, learning_rate={lr}, weight_decay={weight_decay} use_cuda: {use_cuda}")
         super(RerankNet, self).__init__()
         self.encoder = encoder
-        self.learning_rate = learning_rate
+        self.learning_rate = lr
         self.weight_decay = weight_decay
         self.use_cuda = use_cuda
+
         self.optimizer = optim.Adam([
             {'params': self.encoder.parameters()}], 
             lr=self.learning_rate, weight_decay=self.weight_decay
         )
-        
         self.criterion = marginal_nll
-        
-    def forward(self, x):
-        """
-        query : (N, h), candidates : (N, topk, h)
 
-        output : (N, topk)
-        """
+
+    def forward(self, x):
         query_token, candidate_tokens = x
         batch_size, topk, max_length = candidate_tokens['input_ids'].shape
 
@@ -43,13 +37,15 @@ class RerankNet(nn.Module):
             candidate_tokens['attention_mask'] = candidate_tokens['attention_mask'].to('cuda')
 
 
+
         # dense embed for query and candidates
         query_embed = self.encoder(
-            input_ids=query_token['input_ids'].squeeze(1),
-            token_type_ids=query_token['token_type_ids'].squeeze(1),
-            attention_mask=query_token['attention_mask'].squeeze(1)
+            input_ids=query_token["input_ids"].squeeze(1),
+            token_type_ids=query_token["token_type_ids"].squeeze(1),
+            attention_mask=query_token["attention_mask"].squeeze(1),
         )
-        query_embed = query_embed[0][:,0].unsqueeze(1) # query : [batch_size, 1, hidden]
+        query_embed = query_embed[0][:,0].unsqueeze(1) #(B, 1, H) ??????? WHY [0]
+
 
         candidate_embeds = self.encoder(
             input_ids=candidate_tokens['input_ids'].reshape(-1, max_length),
@@ -58,8 +54,10 @@ class RerankNet(nn.Module):
         )
         candidate_embeds = candidate_embeds[0][:,0].reshape(batch_size, topk, -1) # [batch_size, topk, hidden]
 
-        # score dense candidates
-        return torch.bmm(query_embed, candidate_embeds.permute(0,2,1)).squeeze(1)
+
+        score = torch.bmm(query_embed, candidate_embeds.permute(0,2,1)).squeeze(1)
+        return score
+
 
     def reshape_candidates_for_encoder(self, candidates):
         """
@@ -90,20 +88,3 @@ class RerankNet(nn.Module):
                 embedding_table.append(batch_embedding)
         embedding_table = torch.cat(embedding_table, dim=0)
         return embedding_table
-
-
-def marginal_nll(score, target):
-    """
-    sum all scores among positive samples
-    """
-    predict = F.softmax(score, dim=-1)
-    loss = predict * target
-    loss = loss.sum(dim=-1)                   # sum all positive scores
-    loss = loss[loss > 0]                     # filter sets with at least one positives
-    loss = torch.clamp(loss, min=1e-9, max=1) # for numerical stability
-    loss = -torch.log(loss)                   # for negative log likelihood
-    if len(loss) == 0:
-        loss = loss.sum()                     # will return zero loss
-    else:
-        loss = loss.mean()
-    return loss
