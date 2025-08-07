@@ -1,0 +1,97 @@
+## Overview:
+This repository is replicating the BioSyn repository with improvements
+
+## Create python virtual environment:
+
+```bash
+$ conda create -n biosyn python=3.9 -y
+$ conda activate biosyn
+```
+## Install torch:
+
+If you have GPU:
+
+```bash
+$ conda install pytorch pytorch-cuda=11.8 -c pytorch -c nvidia
+```
+
+If CPU only:
+
+```bash
+$ conda install pytorch=2.6.0 cpuonly -c pytorch
+```
+
+
+## Remaining packages
+```bash
+$ conda install numpy tqdm transformers faiss-cpu -c conda-forge
+```
+If you are using linux and cuda, you can install faiss-gpu instead of faiss-cpu:
+```bash
+$ conda install faiss-gpu -c pytorch
+```
+
+
+
+## Download data
+
+You can choose to download data of the datasets:
+ncbi-disease, bc5dr-disease, bc5dr-chemical
+
+if you want to download ncbi-disease:
+```bash
+$ python  download_ds.py --ds_name ncbi-disease
+```
+
+Change the arg --ds_name for other dataset
+The data will be downloaded into folder data/ncbi-disease folder
+it will contain:
+- processed_dev/
+- processed_test/
+- processed_train/
+- processed_traindev/
+- dev_dictionary.txt
+- test_dictionary.txt
+- train_dictionary.txt
+
+## Train
+To train the model you have to execute train.py specifying the arguments:
+
+| Argument Name              | Description                         |
+|----------------------------|-------------------------------------|
+| `--model_name_or_path`     | Directory for pretrained model (we use default:  'dmis-lab/biobert-base-cased-v1.1')     |
+| `--train_dictionary_path`  | Train dictionary path (path of .txt containing the dictionary)              |
+| `--train_dir`              | Training set directory (dir containing the .concept files)              |
+| `--output_dir`             | Directory for output trained model                |
+| `--max_length`             | Max sequence length for tokenizer   |
+| `--seed`                   | Random seed                         |
+| `--use_cuda`               | Use GPU if available (flag)         |
+| `--draft`                  | Enable draft/minimized mode (flag)  |
+| `--topk`                   | Number of candidates                |
+| `--learning_rate`          | Learning rate for encoder         |
+| `--weight_decay`           | Weight decay for encoder          |
+| `--train_batch_size`       | Batch size for training             |
+| `--epoch`                  | Number of training epochs           |
+| `--save_checkpoint_all`    | Save all checkpoints (flag)         |
+
+
+### Example:
+
+```bash
+python train.py \
+    --model_name_or_path dmis-lab/biobert-base-cased-v1.1 \
+    --train_dictionary_path ./data/ncbi-disease/train_dictionary.txt \
+    --train_dir ./data/ncbi-disease/processed_traindev \
+    --output_dir ./data/output \
+    --topk 20 \
+    --epoch 10 \
+    --train_batch_size 16\
+    --learning_rate 1e-5 \
+    --max_length 25 \
+    --seed 0 \
+```
+
+```powershell
+python train.py --model_name_or_path dmis-lab/biobert-base-cased-v1.1 --train_dictionary_path ./data/ncbi-disease/train_dictionary.txt --train_dir ./data/ncbi-disease/processed_traindev --output_dir ./data/output --topk 20 --epoch 10 --train_batch_size 16 --learning_rate 1e-5 --max_length 25 --seed 0
+
+```

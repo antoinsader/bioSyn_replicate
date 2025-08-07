@@ -119,7 +119,7 @@ class BioSyn(object):
         name_dataloader = DataLoader(name_dataset, shuffle=False, collate_fn=default_data_collator, batch_size=batch_size)
 
         with torch.no_grad():
-            for batch in tqdm(name_dataloader, desc='embedding dictionary'):
+            for batch in name_dataloader:
                 outputs = self.encoder(**batch)
                 batch_dense_embeds = outputs[0][:,0].cpu().detach().numpy() # [CLS] representations
                 dense_embeds.append(batch_dense_embeds)

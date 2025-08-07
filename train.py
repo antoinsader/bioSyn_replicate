@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import time
@@ -11,7 +12,10 @@ from utils import get_pkl, init_logging, init_seed, save_pkl
 from biosyn.rerank import RerankNet
 from torch.utils.data import DataLoader 
 
-MINIMIZE = False
+
+os.environ["KMP_VERBOSE"] = "1"
+
+MINIMIZE = True
 TOP_K = 20
 NUM_EPOCHS= 10
 TRAIN_BATCH_SIZE  = 16
@@ -19,12 +23,12 @@ TRAIN_BATCH_SIZE  = 16
 MAX_LENGTH = 25
 USE_CUDA = False
 LEARNING_RATE = 1e-5
-SAVE_CHKPNT_ALL =True
+SAVE_CHKPNT_ALL =False
 
 
 ENCODER_MODEL_NAME = 'dmis-lab/biobert-base-cased-v1.1' #Dense encoder model nmae
-TRAIN_DICT_PATH = r'C:\\Users\\antoi\\Desktop\\thesis\\datasets\\ncbi\\ncbi-disease\\train_dictionary.txt'
-TRAIN_DIR = r'C:\\Users\\antoi\\Desktop\\thesis\\datasets\\ncbi\\ncbi-disease\\processed_traindev'
+TRAIN_DICT_PATH = "./data/ncbi-disease/train_dictionary.txt"
+TRAIN_DIR = "./data/ncbi-disease/processed_traindev"
 OUTPUT_DIR = "./data/output"
 WEIGHT_DECAY = 0.01
 
@@ -34,31 +38,53 @@ LOGGER = logging.getLogger()
 
 
 def parse_args():
-    args = {
-        "model_name_or_path": ENCODER_MODEL_NAME,
-        "train_dictionary_path": TRAIN_DICT_PATH,
-        "train_dir": TRAIN_DIR,
-        "output_dir": OUTPUT_DIR,
-        "max_length": MAX_LENGTH,
-        "seed": 0,
-        "use_cuda": USE_CUDA,
-        "draft": MINIMIZE,
-        "topk": TOP_K,
-        "learning_rate": LEARNING_RATE,
-        "weight_decay": WEIGHT_DECAY,
-        "train_batch_size": TRAIN_BATCH_SIZE,
-        "epoch": NUM_EPOCHS,
-        "save_checkpoint_all": SAVE_CHKPNT_ALL
-    }
+    global MINIMIZE, TOP_K, NUM_EPOCHS, TRAIN_BATCH_SIZE, TRAIN_DICT_PATH, ENCODER_MODEL_NAME, TRAIN_DIR, OUTPUT_DIR, WEIGHT_DECAY, MAX_LENGTH, USE_CUDA, LEARNING_RATE, SAVE_CHKPNT_ALL
+    
+    parser = argparse.ArgumentParser(description='Biosyn train')
 
+    parser.add_argument('--model_name_or_path',
+                        help='Directory for pretrained model', default=ENCODER_MODEL_NAME)
+    parser.add_argument('--train_dictionary_path', type=str,
+                    help='train dictionary path', default=TRAIN_DICT_PATH)
+    parser.add_argument('--train_dir', type=str, 
+                    help='training set directory', default=TRAIN_DIR)
+    parser.add_argument('--output_dir', type=str,
+                        help='Directory for output', default=OUTPUT_DIR)
+    
+    # Tokenizer settings
+    parser.add_argument('--max_length', default=MAX_LENGTH, type=int)
+
+    # Train config
+    parser.add_argument('--seed',  type=int, 
+                        default=0)
+    parser.add_argument('--use_cuda',  action="store_true", default=USE_CUDA)
+    parser.add_argument('--draft',  action="store_true", default=MINIMIZE)
+    parser.add_argument('--topk',  type=int, 
+                        default=TOP_K)
+    parser.add_argument('--learning_rate',
+                        help='learning rate',
+                        default=LEARNING_RATE, type=float)
+    parser.add_argument('--weight_decay',
+                        help='weight decay',
+                        default=WEIGHT_DECAY, type=float)
+    parser.add_argument('--train_batch_size',
+                        help='train batch size',
+                        default=TRAIN_BATCH_SIZE, type=int)
+    parser.add_argument('--epoch',
+                        help='epoch to train',
+                        default=NUM_EPOCHS, type=int)
+
+    parser.add_argument('--save_checkpoint_all', action="store_true", default=SAVE_CHKPNT_ALL)
+
+    args = parser.parse_args()
     return args
 
 
 def train(data_loader, model):
-    LOGGER.info("train!")
     train_loss = 0
     train_steps = 0
     model.train()
+    print(f"epoch, data loader len:  {len(data_loader)} ")
     for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
         model.optimizer.zero_grad()
         batch_x, batch_y = data
@@ -72,53 +98,51 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 def main():
-    global MINIMIZE, TOP_K, NUM_EPOCHS, TRAIN_BATCH_SIZE, TRAIN_DICT_PATH, ENCODER_MODEL_NAME, TRAIN_DIR, OUTPUT_DIR, WEIGHT_DECAY, MAX_LENGTH, USE_CUDA, LEARNING_RATE, SAVE_CHKPNT_ALL
-    
+
     args = parse_args()
     init_logging(LOGGER)
-    init_seed(LOGGER, args["seed"])
-    if not os.path.exists(args["output_dir"]):
-        os.makedirs(args["output_dir"])
+    init_seed(LOGGER, args.seed)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)     
 
     # np array containing each item is (cui, name)
     # N
-    train_dictionary  = load_dictionary(dict_path=TRAIN_DICT_PATH)
+    train_dictionary  = load_dictionary(dict_path=args.train_dictionary_path)
 
     # np array containing each item is (cui, mention)
     # M
-    train_queries  = load_queries(data_dir=TRAIN_DIR, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
+    train_queries  = load_queries(data_dir=args.train_dir, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
 
-    if MINIMIZE:
+    if args.draft:
         train_dictionary = train_dictionary[:100]
         train_queries = train_queries[:10]
-        OUTPUT_DIR = OUTPUT_DIR + "_min"
+        args.output_dir = args.output_dir + "_min"
 
-    
     # train_dictionary = get_pkl("./data/train_dict.pkl")
     # train_queries = get_pkl("./data/train_queries.pkl")
-    
 
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     names_in_train_dict = train_dictionary[:, 0] # N
     names_in_train_queries = train_queries[:, 0] # M
 
-    biosyn = BioSyn(MAX_LENGTH, USE_CUDA)
-    biosyn.load_dense_encoder(ENCODER_MODEL_NAME)
+    biosyn = BioSyn(args.max_length, args.use_cuda)
+    LOGGER.info(f"Loading encoder from: {args.model_name_or_path}")
+    biosyn.load_dense_encoder(args.model_name_or_path)
 
     model = RerankNet(
         encoder=biosyn.encoder,
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-        use_cuda=USE_CUDA
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+        use_cuda=args.use_cuda
     )
     train_set = CandidateDataset(
         queries = train_queries, 
         dicts = train_dictionary, 
         tokenizer = biosyn.get_dense_tokenizer(), 
-        max_length = MAX_LENGTH, 
-        topk= TOP_K
+        max_length = args.max_length, 
+        topk= args.topk
     )
 
 
@@ -126,25 +150,31 @@ def main():
     start = time.time()
 
     #for epoch
-
-    for epoch in range(1,NUM_EPOCHS+1):
-        LOGGER.info("Epoch {}/{}".format(epoch,NUM_EPOCHS))
+    for epoch in tqdm(range(1,args.epoch+1)):
+        # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
         dict_embs = biosyn.embed_dense(names=names_in_train_dict)
-        # faiss.normalize_L2(dict_embs)
         index = faiss.IndexFlatIP(dict_embs.shape[1])
         index.add(dict_embs)
         model.dict_embs_tensor = torch.from_numpy(dict_embs)
         query_embs = biosyn.embed_dense(names=names_in_train_queries)
-        # faiss.normalize_L2(query_embs)
-        _, train_dense_candidate_idxs = index.search(query_embs, TOP_K)
+
+        _, train_dense_candidate_idxs = index.search(query_embs, args.topk)
         train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
         train_loader = DataLoader(
-            train_set, batch_size=TRAIN_BATCH_SIZE, shuffle=False
+            train_set, batch_size=args.train_batch_size, shuffle=False
         )
         train_loss = train(data_loader=train_loader, model=model)
-        LOGGER.info('loss/train_per_epoch={}/{}'.format(train_loss,0))
-        if epoch == NUM_EPOCHS:
-            biosyn.save_model(OUTPUT_DIR)
+        # LOGGER.info('loss/train_per_epoch={}/{}'.format(train_loss,epoch))
+
+
+        if args.save_checkpoint_all:
+            checkpoint_dir = os.path.join(args.output_dir, "checkpoint_{}".format(epoch))
+            if not os.path.exists(checkpoint_dir):
+                os.makedirs(checkpoint_dir)
+            biosyn.save_model(checkpoint_dir)
+
+        if epoch == args.epoch:
+            biosyn.save_model(args.output_dir)
     end = time.time()
     training_time = end-start
     training_hour = int(training_time/60/60)
@@ -155,3 +185,20 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+# python train.py \
+#     --model_name_or_path ${MODEL_NAME_OR_PATH} \
+#     --train_dictionary_path ${DATA_DIR}/train_dictionary.txt \
+#     --train_dir ${DATA_DIR}/processed_traindev \
+#     --output_dir ${OUTPUT_DIR} \
+#     --use_cuda \
+#     --topk 20 \
+#     --epoch 10 \
+#     --train_batch_size 16\
+#     --initial_sparse_weight 0\
+#     --learning_rate 1e-5 \
+#     --max_length 25 \
+#     --dense_ratio 0.5
