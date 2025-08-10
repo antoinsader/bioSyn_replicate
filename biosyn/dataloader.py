@@ -52,7 +52,7 @@ class NamesDataset(torch.utils.data.Dataset):
         return len(self.encodings.input_ids)
 
 class CandidateDataset(torch.utils.data.Dataset):
-    def __init__(self, queries, dicts, tokenizer, max_length, topk):
+    def __init__(self, queries, dicts, tokenizer, max_length, topk, pre_tokenize):
         """
         Retrieve top-k candidates based on dense embedding
         Parameters
@@ -72,6 +72,19 @@ class CandidateDataset(torch.utils.data.Dataset):
         self.max_length = max_length
         self.topk = topk
         self.d_cand_idxs = None
+        self.pre_tokenize = pre_tokenize
+        if pre_tokenize:
+            all_query_names_tokens = self.tokenizer(self.query_names, max_length=max_length,padding='max_length', truncation=True, return_tensors='pt' )
+            self.all_query_names_tokens = [
+                {
+                    "input_ids": all_query_names_tokens["input_ids"][idx],
+                    "attention_mask": all_query_names_tokens["attention_mask"][idx],
+                } for  idx in range(len(all_query_names_tokens["input_ids"]))]
+
+            self.all_dict_names_tokens= self.tokenizer(self.dict_names, max_length=max_length,padding='max_length', truncation=True, return_tensors='pt')
+
+
+
 
     def set_dense_candidate_idxs(self, d_cand_idxs):
         self.d_cand_idxs = d_cand_idxs
@@ -83,21 +96,34 @@ class CandidateDataset(torch.utils.data.Dataset):
             cand_tokens: 
         """
         assert (self.d_cand_idxs is not None)
-        query_name = self.query_names[query_idx]
-        # print(f"********* query name: {query_name}")
-        query_tokens = self.tokenizer(query_name, max_length=self.max_length,padding='max_length', truncation=True, return_tensors='pt' )
+
+        if self.pre_tokenize:
+            query_tokens = self.all_query_names_tokens[query_idx]
+        else:
+            query_name = self.query_names[query_idx]
+            query_tokens = self.tokenizer(query_name, max_length=self.max_length,padding='max_length', truncation=True, return_tensors='pt' )
+
+
+
         d_cand_idxs = self.d_cand_idxs[query_idx]
         topk_candidate_idx = np.array(d_cand_idxs)
 
         assert len(topk_candidate_idx) == self.topk
         assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
 
-        cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
-        labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
-        # print(f"********* labels: {labels}")
 
-        cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
-        # print(f"********* len cand_tokens: {cand_tokens['input_ids'].shape}")
+        if self.pre_tokenize:
+            cand_idxs_tensor = torch.as_tensor(topk_candidate_idx, dtype=torch.long)
+            cand_tokens = {
+                k: v.index_select(0, cand_idxs_tensor)
+                for k, v in self.all_dict_names_tokens.items()
+                if isinstance(v, torch.Tensor)
+            }
+        else:
+            cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
+            cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
+
+        labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
 
         return (query_tokens, cand_tokens), labels
 

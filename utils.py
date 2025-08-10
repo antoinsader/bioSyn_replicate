@@ -17,9 +17,9 @@ def init_logging(LOGGER, base_output_dir, logging_folder, minimize):
     log_dir = os.path.join(base_output_dir, logs_folder_name, logging_folder)
     
     os.makedirs(log_dir, exist_ok=True)
-    log_file_path = os.path.join(log_dir + f"{date_str}.log")
+    log_file_path = os.path.join(log_dir, f"{date_str}.log")
     LOGGER.setLevel(logging.INFO)
-    fmt = logging.Formatter('(message)s')
+    fmt = logging.Formatter('%(message)s')
 
     console = logging.StreamHandler()
     console.setFormatter(fmt)

@@ -28,10 +28,8 @@ class RerankNet(nn.Module):
 
         if self.use_cuda:
             query_token['input_ids'] = query_token['input_ids'].to('cuda')
-            query_token['token_type_ids'] = query_token['token_type_ids'].to('cuda')
             query_token['attention_mask'] = query_token['attention_mask'].to('cuda')
             candidate_tokens['input_ids'] = candidate_tokens['input_ids'].to('cuda')
-            candidate_tokens['token_type_ids'] = candidate_tokens['token_type_ids'].to('cuda')
             candidate_tokens['attention_mask'] = candidate_tokens['attention_mask'].to('cuda')
 
 
@@ -39,15 +37,13 @@ class RerankNet(nn.Module):
         # dense embed for query and candidates
         query_embed = self.encoder(
             input_ids=query_token["input_ids"].squeeze(1),
-            token_type_ids=query_token["token_type_ids"].squeeze(1),
             attention_mask=query_token["attention_mask"].squeeze(1),
         )
-        query_embed = query_embed[0][:,0].unsqueeze(1) #(B, 1, H) ??????? WHY [0]
+        query_embed = query_embed[0][:,0].unsqueeze(1) #(B, 1, H) ??????? WHY [0] last hidden state
 
 
         candidate_embeds = self.encoder(
             input_ids=candidate_tokens['input_ids'].reshape(-1, max_length),
-            token_type_ids=candidate_tokens['token_type_ids'].reshape(-1, max_length),
             attention_mask=candidate_tokens['attention_mask'].reshape(-1, max_length)
         )
         candidate_embeds = candidate_embeds[0][:,0].reshape(batch_size, topk, -1) # [batch_size, topk, hidden]

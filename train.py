@@ -4,6 +4,7 @@ import os
 import time
 
 import faiss
+from metric_logger import MetricsLogger
 import torch
 from tqdm import tqdm
 from biosyn.biosyn import BioSyn
@@ -15,7 +16,7 @@ from torch.utils.data import DataLoader
 
 os.environ["KMP_VERBOSE"] = "1"
 
-MINIMIZE = False
+MINIMIZE = True
 TOP_K = 20
 NUM_EPOCHS= 10
 TRAIN_BATCH_SIZE  = 16
@@ -25,14 +26,18 @@ USE_CUDA = False
 LEARNING_RATE = 1e-5
 
 SAVE_CHKPNT_ALL =True
-NOT_USE_FAISS = False
 
 
 ENCODER_MODEL_NAME = 'dmis-lab/biobert-base-cased-v1.1' #Dense encoder model nmae
-TRAIN_DICT_PATH = "./data/ncbi-disease/train_dictionary.txt"
-TRAIN_DIR = "./data/ncbi-disease/processed_traindev"
+TRAIN_DICT_PATH = "./data/data-ncbi-fair/train_dictionary.txt"
+TRAIN_DIR = "./data/data-ncbi-fair/traindev"
 OUTPUT_DIR = "./data/output"
 WEIGHT_DECAY = 0.01
+
+
+
+PRE_TOKENIZE = True
+NOT_USE_FAISS = False
 
 
 LOGGER = logging.getLogger()
@@ -60,7 +65,6 @@ def parse_args():
                         default=0)
     parser.add_argument('--use_cuda',  action="store_true", default=USE_CUDA)
     parser.add_argument('--draft',  action="store_true", default=MINIMIZE)
-    parser.add_argument('--not_use_faiss',  action="store_true", default=NOT_USE_FAISS)
     parser.add_argument('--topk',  type=int, 
                         default=TOP_K)
     parser.add_argument('--learning_rate',
@@ -77,6 +81,11 @@ def parse_args():
                         default=NUM_EPOCHS, type=int)
 
     parser.add_argument('--save_checkpoint_all', action="store_true", default=SAVE_CHKPNT_ALL)
+
+
+    parser.add_argument('--not_use_faiss',  action="store_true", default=NOT_USE_FAISS)
+    parser.add_argument('--pre_tokenize',  action="store_true", default=PRE_TOKENIZE)
+
 
     args = parser.parse_args()
     return args
@@ -113,9 +122,11 @@ def main():
     # M
     train_queries  = load_queries(data_dir=args.train_dir, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
 
+
+
     if args.draft:
-        train_dictionary = train_dictionary[:1000]
-        train_queries = train_queries[:100]
+        train_dictionary = train_dictionary[:100]
+        train_queries = train_queries[:10]
         args.output_dir = args.output_dir + "_min"
 
     LOGGER.info(f"train_dictionary is loaded from file: {args.train_dictionary_path} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_dictionary)}")
@@ -147,7 +158,8 @@ def main():
         dicts = train_dictionary, 
         tokenizer = biosyn.get_dense_tokenizer(), 
         max_length = args.max_length, 
-        topk= args.topk
+        topk= args.topk,
+        pre_tokenize = args.pre_tokenize
     )
     LOGGER.info(f"Candidate DS is initiated with len queries: {len(train_queries)}, len dicts: {len(train_dictionary)}, max_length: {args.max_length}, topk: {args.topk} ")
     LOGGER.info(f"The training will {'will not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
@@ -155,10 +167,16 @@ def main():
 
     start = time.time()
     LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
+    metrics = MetricsLogger(
+        logger=LOGGER,
+        use_cuda=args.use_cuda,
+        tag="train"
+    )
+    metrics.start_run()
     #for epoch
     for epoch in tqdm(range(1,args.epoch+1)):
         # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
-
+        t_epoch = time.time()
 
         if args.not_use_faiss:
             dict_embs = biosyn.embed_dense(names=names_in_train_dict)
@@ -191,8 +209,8 @@ def main():
             train_set, batch_size=args.train_batch_size, shuffle=False
         )
         train_loss = train(data_loader=train_loader, model=model)
-        LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
-
+        # LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
+        metrics.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
 
         if args.save_checkpoint_all:
             checkpoint_dir = os.path.join(args.output_dir, "checkpoint_{}".format(epoch))
@@ -208,6 +226,7 @@ def main():
     training_minute = int(training_time/60 % 60)
     training_second = int(training_time % 60)
     LOGGER.info("Training Time!{} hours {} minutes {} seconds".format(training_hour, training_minute, training_second))
+    metrics.end_run()
 
 
 if __name__ == "__main__":
