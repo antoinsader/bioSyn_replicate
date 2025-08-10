@@ -97,10 +97,10 @@ it will contain:
 - test_dictionary.txt
 - train_dictionary.txt
 
-## Use fair data evaluation
+<!-- ## Use fair data evaluation
 
 In the folder data/data-ncbi-fair we have training/testing data for fair training and evaluation 
-In the folder data/ncbi-disease-normal (could be the data you download using download_ds.py) having the normal data biosyn is training on
+In the folder data/ncbi-disease-normal (could be the data you download using download_ds.py) having the normal data biosyn is training on -->
 
 ## Train
 
