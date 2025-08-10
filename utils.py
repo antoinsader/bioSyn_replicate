@@ -7,15 +7,31 @@ import random
 import os
 import torch.nn.functional as F
 import pickle
+from datetime import datetime
+
+def init_logging(LOGGER, base_output_dir, logging_folder, minimize):
 
 
-def init_logging(LOGGER):
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    logs_folder_name = 'logs_min' if minimize else 'logs'
+    log_dir = os.path.join(base_output_dir, logs_folder_name, logging_folder)
+    
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir + f"{date_str}.log")
     LOGGER.setLevel(logging.INFO)
-    fmt = logging.Formatter('%(asctime)s: [ %(message)s ]',
-                            '%m/%d/%Y %I:%M:%S %p')
+    fmt = logging.Formatter('(message)s')
+
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     LOGGER.addHandler(console)
+
+
+    file_handler = logging.FileHandler(log_file_path, mode="w", encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    LOGGER.addHandler(file_handler)
+
+    LOGGER.info(f"Logging file: {log_file_path}")
+    return log_file_path
 
 def init_seed(LOGGER, seed=None):
     if seed == None:

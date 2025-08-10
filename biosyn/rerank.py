@@ -5,12 +5,10 @@ import torch.optim as optim
 import logging
 from tqdm import tqdm
 from utils import marginal_nll 
-LOGGER = logging.getLogger(__name__)
 
 
 class RerankNet(nn.Module):
     def __init__(self, encoder, lr, weight_decay, use_cuda):
-        LOGGER.info(f"Reranknet, learning_rate={lr}, weight_decay={weight_decay} use_cuda: {use_cuda}")
         super(RerankNet, self).__init__()
         self.encoder = encoder
         self.learning_rate = lr

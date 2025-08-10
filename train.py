@@ -86,7 +86,6 @@ def train(data_loader, model):
     train_loss = 0
     train_steps = 0
     model.train()
-    print(f"epoch, data loader len:  {len(data_loader)} ")
     for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
         model.optimizer.zero_grad()
         batch_x, batch_y = data
@@ -100,12 +99,11 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 def main():
-
     args = parse_args()
-    init_logging(LOGGER)
+    init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
     init_seed(LOGGER, args.seed)
     if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)     
+        os.makedirs(args.output_dir)
 
     # np array containing each item is (cui, name)
     # N
@@ -116,9 +114,12 @@ def main():
     train_queries  = load_queries(data_dir=args.train_dir, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
 
     if args.draft:
-        train_dictionary = train_dictionary[:100]
-        train_queries = train_queries[:10]
+        train_dictionary = train_dictionary[:1000]
+        train_queries = train_queries[:100]
         args.output_dir = args.output_dir + "_min"
+
+    LOGGER.info(f"train_dictionary is loaded from file: {args.train_dictionary_path} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_dictionary)}")
+    LOGGER.info(f"train_queries is loaded from file: {args.train_dir} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_queries)}")
 
     # train_dictionary = get_pkl("./data/train_dict.pkl")
     # train_queries = get_pkl("./data/train_queries.pkl")
@@ -139,6 +140,8 @@ def main():
         weight_decay=args.weight_decay,
         use_cuda=args.use_cuda
     )
+    LOGGER.info(f"Reranknet model is initiated with: learning_rate={args.learning_rate},weight_decay={args.weight_decay}, use_cuda={args.use_cuda} ")
+
     train_set = CandidateDataset(
         queries = train_queries, 
         dicts = train_dictionary, 
@@ -146,11 +149,12 @@ def main():
         max_length = args.max_length, 
         topk= args.topk
     )
-
+    LOGGER.info(f"Candidate DS is initiated with len queries: {len(train_queries)}, len dicts: {len(train_dictionary)}, max_length: {args.max_length}, topk: {args.topk} ")
+    LOGGER.info(f"The training will {'will not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
 
 
     start = time.time()
-
+    LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
     #for epoch
     for epoch in tqdm(range(1,args.epoch+1)):
         # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
@@ -187,7 +191,7 @@ def main():
             train_set, batch_size=args.train_batch_size, shuffle=False
         )
         train_loss = train(data_loader=train_loader, model=model)
-        LOGGER.info('loss/train_per_epoch={}/{}'.format(train_loss,epoch))
+        LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
 
 
         if args.save_checkpoint_all:

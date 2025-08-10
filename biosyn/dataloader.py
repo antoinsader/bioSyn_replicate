@@ -6,11 +6,9 @@ import numpy as np
 import glob
 import os
 
-LOGGER = logging.getLogger(__name__)
 
 
 def load_dictionary(dict_path):
-    LOGGER.info(f"Loading dictionary dataset! dictionary path={dict_path}  ")
     data = []
     with open(dict_path, mode="r", encoding="utf-8") as f:
         lines =  f.readlines()
@@ -23,7 +21,6 @@ def load_dictionary(dict_path):
         return data
 
 def load_queries(data_dir, filter_composite, filter_duplicates, filter_cuiless):
-    LOGGER.info(f"Loading query dataset! data_dir={data_dir}")
     data = []
     concept_files = glob.glob(os.path.join(data_dir, "*.concept"))
     
@@ -69,7 +66,6 @@ class CandidateDataset(torch.utils.data.Dataset):
         topk : int
             The number of candidates
         """
-        LOGGER.info(f"Candidatedatasets! len queries: {len(queries)}, len dicts: {len(dicts)}")
         self.query_names, self.query_ids = [row[0] for row in queries], [row[1] for row in queries]
         self.dict_names, self.dict_ids = [row[0] for row in dicts], [row[1] for row in dicts]
         self.tokenizer= tokenizer

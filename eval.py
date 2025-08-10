@@ -175,7 +175,7 @@ def evaluate(biosyn, eval_dictionary, eval_queries, topk, score_mode='hybrid'):
 
 def main():
     args = parse_args()
-    init_logging(LOGGER)
+    init_logging(LOGGER, base_output_dir= args.output_dir,logging_folder="eval", minimize=args.draft)
     eval_dictionary = load_dictionary(dict_path=args.dictionary_path)
     eval_queries = load_queries(data_dir=args.data_dir, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
     biosyn = BioSyn(
@@ -185,6 +185,8 @@ def main():
     biosyn.load_model(
         model_name_or_path=args.model_name_or_path
     )
+    LOGGER.info(f"Loading encoder from: {args.model_name_or_path}")
+
     result_evalset = evaluate(
         biosyn=biosyn,
         eval_dictionary=eval_dictionary,
