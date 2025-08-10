@@ -1,31 +1,74 @@
 ## Overview:
 This repository is replicating the BioSyn repository with improvements
 
-## Create python virtual environment:
+## Setup
+
+For setup, you can use Conda or pip with venv, for windows I recommend using Conda and for linux with gpu I recommend using pip with venv 
+
+## Setup using pip and venv
+
+### Create virtual environment
 
 ```bash
-$ conda create -n biosyn python=3.9 -y
-$ conda activate biosyn
+$ python -m venv myenv
 ```
+
+### Activate virtual environment (windows)
+
+```bash
+$ ./myenv/Scripts/activate
+```
+
+### Activate virtual environment (linux)
+
+```bash
+$ source ./myenv/bin/activate
+```
+
+### Install requirements
+
+
+```bash
+$ pip install torch
+$ pip install tqdm transformers requests
+$ pip install faiss-cpu
+```
+
+If you're using linux and cuda, you can install faiss-gpu instead of faiss-cpu
+```bash
+$ conda install faiss-gpu -c pytorch
+```
+
+
+## Setup using Conda
+
+### Create virtual environment:
+
+```bash
+$ conda create -n bsn python=3.9 -y
+$ conda activate bsn
+```
+
 ## Install torch:
 
-If you have GPU:
+Gpu use:
 
 ```bash
-$ conda install pytorch pytorch-cuda=11.8 -c pytorch -c nvidia
+$ conda install pytorch pytorch-cuda=12.1 -c pytorch -c nvidia
 ```
 
-If CPU only:
+CPU use:
 
 ```bash
 $ conda install pytorch=2.6.0 cpuonly -c pytorch
 ```
 
-
 ## Remaining packages
 ```bash
-$ conda install numpy tqdm transformers faiss-cpu -c conda-forge
+$ conda install numpy tqdm transformers requests  -c conda-forge
+$ conda install faiss-cpu -c conda-forge
 ```
+
 If you are using linux and cuda, you can install faiss-gpu instead of faiss-cpu:
 ```bash
 $ conda install faiss-gpu -c pytorch
@@ -44,7 +87,7 @@ $ python  download_ds.py --ds_name ncbi-disease
 ```
 
 Change the arg --ds_name for other dataset
-The data will be downloaded into folder data/ncbi-disease folder
+The data will be downloaded into folder data/ncbi-disease-normal folder
 it will contain:
 - processed_dev/
 - processed_test/
@@ -53,6 +96,11 @@ it will contain:
 - dev_dictionary.txt
 - test_dictionary.txt
 - train_dictionary.txt
+
+## Use fair data evaluation
+
+In the folder data/data-ncbi-fair we have training/testing data for fair training and evaluation 
+In the folder data/ncbi-disease-normal (could be the data you download using download_ds.py) having the normal data biosyn is training on
 
 ## Train
 To train the model you have to execute train.py specifying the arguments:
@@ -92,6 +140,6 @@ python train.py \
 ```
 
 ```powershell
-python train.py --model_name_or_path dmis-lab/biobert-base-cased-v1.1 --train_dictionary_path ./data/ncbi-disease/train_dictionary.txt --train_dir ./data/ncbi-disease/processed_traindev --output_dir ./data/output --topk 20 --epoch 10 --train_batch_size 16 --learning_rate 1e-5 --max_length 25 --seed 0
-
+$ python train.py --model_name_or_path dmis-lab/biobert-base-cased-v1.1 --train_dictionary_path ./data/ncbi-disease/train_dictionary.txt --train_dir ./data/ncbi-disease/processed_traindev --output_dir ./data/output --topk 20 --epoch 10 --train_batch_size 16 --learning_rate 1e-5 --max_length 25 --seed 0
 ```
+

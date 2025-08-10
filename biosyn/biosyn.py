@@ -121,6 +121,7 @@ class BioSyn(object):
         with torch.no_grad():
             for batch in name_dataloader:
                 outputs = self.encoder(**batch)
+                # [start token]  mention [end token] - mean pooling, using the context of the mention, we do the mean pool for the two tokens surrounding the mention
                 batch_dense_embeds = outputs[0][:,0].cpu().detach().numpy() # [CLS] representations
                 dense_embeds.append(batch_dense_embeds)
         dense_embeds = np.concatenate(dense_embeds, axis=0)

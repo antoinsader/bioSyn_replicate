@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 os.environ["KMP_VERBOSE"] = "1"
 
-MINIMIZE = True
+MINIMIZE = False
 TOP_K = 20
 NUM_EPOCHS= 10
 TRAIN_BATCH_SIZE  = 16
@@ -23,7 +23,7 @@ TRAIN_BATCH_SIZE  = 16
 MAX_LENGTH = 25
 USE_CUDA = False
 LEARNING_RATE = 1e-5
-SAVE_CHKPNT_ALL =False
+SAVE_CHKPNT_ALL =True
 
 
 ENCODER_MODEL_NAME = 'dmis-lab/biobert-base-cased-v1.1' #Dense encoder model nmae
@@ -50,7 +50,6 @@ def parse_args():
                     help='training set directory', default=TRAIN_DIR)
     parser.add_argument('--output_dir', type=str,
                         help='Directory for output', default=OUTPUT_DIR)
-    
     # Tokenizer settings
     parser.add_argument('--max_length', default=MAX_LENGTH, type=int)
 
@@ -164,7 +163,7 @@ def main():
             train_set, batch_size=args.train_batch_size, shuffle=False
         )
         train_loss = train(data_loader=train_loader, model=model)
-        # LOGGER.info('loss/train_per_epoch={}/{}'.format(train_loss,epoch))
+        LOGGER.info('loss/train_per_epoch={}/{}'.format(train_loss,epoch))
 
 
         if args.save_checkpoint_all:
