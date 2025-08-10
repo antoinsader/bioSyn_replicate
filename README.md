@@ -103,7 +103,10 @@ In the folder data/data-ncbi-fair we have training/testing data for fair trainin
 In the folder data/ncbi-disease-normal (could be the data you download using download_ds.py) having the normal data biosyn is training on
 
 ## Train
+
 To train the model you have to execute train.py specifying the arguments:
+(All arguments have default values where you can see the default in the train.py global variables in order to be able to run `python train.py` only, but also you can override them by specifying them, for example `python train.py --use_cuda`)
+
 
 | Argument Name              | Description                         |
 |----------------------------|-------------------------------------|
@@ -121,6 +124,8 @@ To train the model you have to execute train.py specifying the arguments:
 | `--train_batch_size`       | Batch size for training             |
 | `--epoch`                  | Number of training epochs           |
 | `--save_checkpoint_all`    | Save all checkpoints (flag)         |
+| `--not_use_faiss`    | If set, means to use normal biosyn embeding (flag)         |
+
 
 
 ### Example:
@@ -142,4 +147,8 @@ python train.py \
 ```powershell
 $ python train.py --model_name_or_path dmis-lab/biobert-base-cased-v1.1 --train_dictionary_path ./data/ncbi-disease/train_dictionary.txt --train_dir ./data/ncbi-disease/processed_traindev --output_dir ./data/output --topk 20 --epoch 10 --train_batch_size 16 --learning_rate 1e-5 --max_length 25 --seed 0
 ```
+
+### Use FAISS:
+The first advantage of this repo on the normal BioSyn, is introducing FAISS (Facebook AI Similarity Search) which allows us to do dense embedding comparison using FAISS indexes instead of np.argsort and np.matmul
+You can control this by using the argument flag `--not_use_faiss`
 

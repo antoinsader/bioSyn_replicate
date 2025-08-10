@@ -23,7 +23,9 @@ TRAIN_BATCH_SIZE  = 16
 MAX_LENGTH = 25
 USE_CUDA = False
 LEARNING_RATE = 1e-5
+
 SAVE_CHKPNT_ALL =True
+NOT_USE_FAISS = False
 
 
 ENCODER_MODEL_NAME = 'dmis-lab/biobert-base-cased-v1.1' #Dense encoder model nmae
@@ -58,6 +60,7 @@ def parse_args():
                         default=0)
     parser.add_argument('--use_cuda',  action="store_true", default=USE_CUDA)
     parser.add_argument('--draft',  action="store_true", default=MINIMIZE)
+    parser.add_argument('--not_use_faiss',  action="store_true", default=NOT_USE_FAISS)
     parser.add_argument('--topk',  type=int, 
                         default=TOP_K)
     parser.add_argument('--learning_rate',
@@ -151,14 +154,35 @@ def main():
     #for epoch
     for epoch in tqdm(range(1,args.epoch+1)):
         # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
-        dict_embs = biosyn.embed_dense(names=names_in_train_dict)
-        index = faiss.IndexFlatIP(dict_embs.shape[1])
-        index.add(dict_embs)
-        model.dict_embs_tensor = torch.from_numpy(dict_embs)
-        query_embs = biosyn.embed_dense(names=names_in_train_queries)
 
-        _, train_dense_candidate_idxs = index.search(query_embs, args.topk)
-        train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
+
+        if args.not_use_faiss:
+            dict_embs = biosyn.embed_dense(names=names_in_train_dict)
+            query_embs = biosyn.embed_dense(names=names_in_train_queries)
+            train_dense_score_matrix = biosyn.get_score_matrix(
+                dict_embeds=dict_embs,
+                query_embeds=query_embs,
+            )
+            train_dense_candidate_idxs = biosyn.retrieve_candidate(
+                score_matrix=train_dense_score_matrix, 
+                topk=args.topk
+            )
+            # replace dense candidates in the train_set
+            train_set.set_dense_candidate_idxs(d_candidate_idxs=train_dense_candidate_idxs)
+        else:
+            dict_embs = biosyn.embed_dense(names=names_in_train_dict)
+            index = faiss.IndexFlatIP(dict_embs.shape[1])
+            index.add(dict_embs)
+            model.dict_embs_tensor = torch.from_numpy(dict_embs)
+            query_embs = biosyn.embed_dense(names=names_in_train_queries)
+
+            _, train_dense_candidate_idxs = index.search(query_embs, args.topk)
+            train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
+
+
+
+
+
         train_loader = DataLoader(
             train_set, batch_size=args.train_batch_size, shuffle=False
         )
