@@ -12,7 +12,7 @@ from biosyn.dataloader import CandidateDataset, load_dictionary, load_queries
 from utils import get_pkl, init_logging, init_seed, save_pkl
 from biosyn.rerank import RerankNet
 from torch.utils.data import DataLoader 
-
+import numpy as np
 
 os.environ["KMP_VERBOSE"] = "1"
 
@@ -107,6 +107,8 @@ def train(data_loader, model):
 
     train_loss /= (train_steps + 1e-9)
     return train_loss
+
+
 def main():
     args = parse_args()
     init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
@@ -164,6 +166,9 @@ def main():
     LOGGER.info(f"Candidate DS is initiated with len queries: {len(train_queries)}, len dicts: {len(train_dictionary)}, max_length: {args.max_length}, topk: {args.topk} ")
     LOGGER.info(f"The training will {'will not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
 
+    if not args.not_use_faiss:
+        #Building FAISS index outside the epochs loop
+        biosyn.build_faiss_index(dict_names=names_in_train_dict)
 
     start = time.time()
     LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
@@ -178,9 +183,10 @@ def main():
         # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
         t_epoch = time.time()
 
+        query_embs = biosyn.embed_dense(names=names_in_train_queries)
+
         if args.not_use_faiss:
             dict_embs = biosyn.embed_dense(names=names_in_train_dict)
-            query_embs = biosyn.embed_dense(names=names_in_train_queries)
             train_dense_score_matrix = biosyn.get_score_matrix(
                 dict_embeds=dict_embs,
                 query_embeds=query_embs,
@@ -192,13 +198,8 @@ def main():
             # replace dense candidates in the train_set
             train_set.set_dense_candidate_idxs(d_candidate_idxs=train_dense_candidate_idxs)
         else:
-            dict_embs = biosyn.embed_dense(names=names_in_train_dict)
-            index = faiss.IndexFlatIP(dict_embs.shape[1])
-            index.add(dict_embs)
-            model.dict_embs_tensor = torch.from_numpy(dict_embs)
-            query_embs = biosyn.embed_dense(names=names_in_train_queries)
-
-            _, train_dense_candidate_idxs = index.search(query_embs, args.topk)
+            biosyn.update_faiss_index(dict_names=names_in_train_dict)
+            _, train_dense_candidate_idxs = biosyn.faiss_index.search(query_embs, args.topk)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
 
 

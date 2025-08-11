@@ -8,6 +8,7 @@ from transformers import default_data_collator, AutoModel, AutoTokenizer
 
 from .dataloader import NamesDataset
 
+import faiss
 
 class BioSyn(object):
     def __init__(self, max_length, use_cuda):
@@ -15,6 +16,7 @@ class BioSyn(object):
         self.use_cuda = use_cuda
         self.encoder = None
         self.tokenizer = None
+        self.faiss_index = None
 
 
     def get_dense_encoder(self):
@@ -126,3 +128,28 @@ class BioSyn(object):
                 dense_embeds.append(batch_dense_embeds)
         dense_embeds = np.concatenate(dense_embeds, axis=0)
         return dense_embeds
+
+
+    def build_faiss_index(self, dict_names):
+        dict_embs = self.embed_dense(names=dict_names).astype("float32")
+        d= dict_embs.shape[1]
+        if self.use_cuda:
+            res = faiss.StandardGpuResources()
+            gpu_id = torch.cuda.current_device() if self.use_cuda else 0
+
+            cfg = faiss.GpuIndexFlatConfig()
+            cfg.device = gpu_id
+            cfg.useFloat16 = True
+            
+            base = faiss.GpuIndexFlatIP(res, d, cfg)
+        else:
+            base = faiss.IndexFlatIP(d)
+    
+        base.add(dict_embs)
+        self.faiss_index = base
+
+    def update_faiss_index(self, dict_names):
+        dict_embs = self.embed_dense(names=dict_names).astype("float32")
+        d= dict_embs.shape[1]
+        self.faiss_index.reset()
+        self.faiss_index.add(dict_embs)
