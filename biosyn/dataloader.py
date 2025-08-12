@@ -81,7 +81,7 @@ class CandidateDataset(torch.utils.data.Dataset):
                     "attention_mask": all_query_names_tokens["attention_mask"][idx],
                 } for  idx in range(len(all_query_names_tokens["input_ids"]))]
 
-            self.all_dict_names_tokens= self.tokenizer(self.dict_names, max_length=max_length,padding='max_length', truncation=True, return_tensors='pt')
+            # self.all_dict_names_tokens= self.tokenizer(self.dict_names, max_length=max_length,padding='max_length', truncation=True, return_tensors='pt')
 
 
 
@@ -112,20 +112,20 @@ class CandidateDataset(torch.utils.data.Dataset):
         assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
 
 
-        if self.pre_tokenize:
-            cand_idxs_tensor = torch.as_tensor(topk_candidate_idx, dtype=torch.long)
-            cand_tokens = {
-                k: v.index_select(0, cand_idxs_tensor)
-                for k, v in self.all_dict_names_tokens.items()
-                if isinstance(v, torch.Tensor)
-            }
-        else:
-            cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
-            cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
+        # if self.pre_tokenize:
+            # cand_idxs_tensor = torch.as_tensor(topk_candidate_idx, dtype=torch.long)
+            # cand_tokens = {
+            #     k: v.index_select(0, cand_idxs_tensor)
+            #     for k, v in self.all_dict_names_tokens.items()
+            #     if isinstance(v, torch.Tensor)
+            # }
+        # else:
+            # cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
+            # cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
 
         labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
 
-        return (query_tokens, cand_tokens), labels
+        return (query_tokens, topk_candidate_idx), labels
 
 
     def __len__(self):

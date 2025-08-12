@@ -50,7 +50,7 @@ class MetricsLogger:
     def end_run(self):
         total = time.time() - self.start_ts if self.start_ts else 0.0
          # read final GPU peaks (since start_run)
-        _, g_peak, _, g_res_peak = self._gpu_numbers()
+        _, g_peak, _, g_res_peak = self.gpu_numbers()
         summary = (f"[{self.tag}] END | total={total:.2f}s  | CPU_peak_RSS={self.max_rss_mb:.1f} MB")
         if self.use_cuda:
             summary += (f" | GPU_peak_alloc={g_peak:.1f} MB "

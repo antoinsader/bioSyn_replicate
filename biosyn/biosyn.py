@@ -11,9 +11,10 @@ from .dataloader import NamesDataset
 import faiss
 
 class BioSyn(object):
-    def __init__(self, max_length, use_cuda):
+    def __init__(self, max_length, use_cuda, topk):
         self.max_length = max_length
         self.use_cuda = use_cuda
+        self.topk = topk
         self.encoder = None
         self.tokenizer = None
         self.faiss_index = None
@@ -140,16 +141,41 @@ class BioSyn(object):
             cfg = faiss.GpuIndexFlatConfig()
             cfg.device = gpu_id
             cfg.useFloat16 = True
-            
             base = faiss.GpuIndexFlatIP(res, d, cfg)
         else:
             base = faiss.IndexFlatIP(d)
     
         base.add(dict_embs)
         self.faiss_index = base
+        return dict_embs
 
     def update_faiss_index(self, dict_names):
         dict_embs = self.embed_dense(names=dict_names).astype("float32")
         d= dict_embs.shape[1]
         self.faiss_index.reset()
         self.faiss_index.add(dict_embs)
+        return dict_embs
+    def retreive_cand_idxs_chunks(self, queries_names, mmap_path, chunk_size=768):
+        M = len(queries_names)
+        shape = (M, self.topk)
+        indexes_all = np.memmap(mmap_path, mode="w+", dtype=np.int32, shape=shape)
+
+
+        #stream queries
+        offset = 0
+        for start in range(0, M, chunk_size):
+            end = min(start + chunk_size, M)
+            batch_queries = queries_names[start:end]
+            q = self.embed_dense(batch_queries).astype("float32")
+            if self.use_cuda:
+                q_t = torch.from_numpy(q).to("cuda", non_blocking=True)
+                _, I = self.faiss_index.search(q_t, self.topk)
+                I = I.cpu().numpy()
+            else:
+                _, I = self.faiss_index.search(q,self.topk)
+
+            indexes_all[offset:offset + (end-start)] = I.astype(np.int32, copy=False)
+            offset = end
+
+        indexes_all.flush()
+        return indexes_all

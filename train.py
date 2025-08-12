@@ -17,7 +17,10 @@ import numpy as np
 os.environ["KMP_VERBOSE"] = "1"
 
 MINIMIZE = True
-TOP_K = 20
+# TOP_K = 20
+TOP_K = 3
+
+
 NUM_EPOCHS= 10
 TRAIN_BATCH_SIZE  = 16
 
@@ -111,6 +114,11 @@ def train(data_loader, model):
 
 def main():
     args = parse_args()
+    if args.draft:
+        train_dictionary = train_dictionary[:100]
+        train_queries = train_queries[:10]
+        args.output_dir = args.output_dir + "_min"
+
     init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
     init_seed(LOGGER, args.seed)
     if not os.path.exists(args.output_dir):
@@ -126,10 +134,6 @@ def main():
 
 
 
-    if args.draft:
-        train_dictionary = train_dictionary[:100]
-        train_queries = train_queries[:10]
-        args.output_dir = args.output_dir + "_min"
 
     LOGGER.info(f"train_dictionary is loaded from file: {args.train_dictionary_path} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_dictionary)}")
     LOGGER.info(f"train_queries is loaded from file: {args.train_dir} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_queries)}")
@@ -140,10 +144,16 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
+
+    mmap_dir = args.output_dir + "/mmap_files"
+    if not os.path.exists(mmap_dir):
+        os.makedirs(mmap_dir)
+
+
     names_in_train_dict = train_dictionary[:, 0] # N
     names_in_train_queries = train_queries[:, 0] # M
 
-    biosyn = BioSyn(args.max_length, args.use_cuda)
+    biosyn = BioSyn(args.max_length, args.use_cuda, args.topk)
     LOGGER.info(f"Loading encoder from: {args.model_name_or_path}")
     biosyn.load_dense_encoder(args.model_name_or_path)
 
@@ -168,7 +178,9 @@ def main():
 
     if not args.not_use_faiss:
         #Building FAISS index outside the epochs loop
-        biosyn.build_faiss_index(dict_names=names_in_train_dict)
+        dict_embs = biosyn.build_faiss_index(dict_names=names_in_train_dict)
+        model.set_dictionary_embedings(dict_embs)
+        
 
     start = time.time()
     LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
@@ -183,9 +195,9 @@ def main():
         # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
         t_epoch = time.time()
 
-        query_embs = biosyn.embed_dense(names=names_in_train_queries)
 
         if args.not_use_faiss:
+            query_embs = biosyn.embed_dense(names=names_in_train_queries)
             dict_embs = biosyn.embed_dense(names=names_in_train_dict)
             train_dense_score_matrix = biosyn.get_score_matrix(
                 dict_embeds=dict_embs,
@@ -198,8 +210,11 @@ def main():
             # replace dense candidates in the train_set
             train_set.set_dense_candidate_idxs(d_candidate_idxs=train_dense_candidate_idxs)
         else:
-            biosyn.update_faiss_index(dict_names=names_in_train_dict)
-            _, train_dense_candidate_idxs = biosyn.faiss_index.search(query_embs, args.topk)
+            if epoch > 1:
+                dict_embs  = biosyn.update_faiss_index(dict_names=names_in_train_dict)
+                model.set_dictionary_embedings(dict_embs)
+            mmap_file = os.path.join(mmap_dir, f"cand_idxs_epoch_{epoch}.mmap")
+            train_dense_candidate_idxs = biosyn.retreive_cand_idxs_chunks(names_in_train_queries, mmap_file)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
 
 
