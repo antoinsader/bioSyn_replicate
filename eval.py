@@ -19,8 +19,8 @@ MAX_LENGTH = 25
 USE_CUDA = False
 # OUTPUT_DIR = "./data/output"
 MODEL_DIR = "./data/output"
-TRAIN_DICT_PATH = "./data/ncbi-disease/train_dictionary.txt"
-TEST_DIR = "./data/ncbi-disease/processed_traindev"
+TRAIN_DICT_PATH ="./data/data-ncbi-fair/train_dictionary.txt"
+TEST_DIR = "./data/ncbi-disease/processed_test"
 
 
 LOGGER = logging.getLogger()

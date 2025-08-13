@@ -5,7 +5,7 @@ import torch.optim as optim
 import logging
 from tqdm import tqdm
 from utils import marginal_nll 
-
+import numpy as np
 
 class RerankNet(nn.Module):
     def __init__(self, encoder, lr, weight_decay, use_cuda):
@@ -19,16 +19,23 @@ class RerankNet(nn.Module):
             lr=self.learning_rate, weight_decay=self.weight_decay
         )
         self.criterion = marginal_nll
+        self.device = torch.device("cuda") if use_cuda else torch.device("cpu")
         #sit on the same device of model
         self.register_buffer("dict_embs", torch.empty(0), persistent=False)
+        self.to(self.device)
 
     @torch.no_grad()
     def set_dictionary_embedings(self, dict_embs):
         # self.dict_embs = dict_embs
-        t = torch.from_numpy(dict_embs)
+        if isinstance(dict_embs, np.ndarray):
+            t = torch.from_numpy(dict_embs)
+        elif torch.is_tensor(dict_embs):
+            t = dict_embs
         t= t.contiguous()
-        t= t.to(next(self.parameters()).device, non_blocking=True)
-        self.dict_embs.resize_(t.shape).copy_(t)
+        t= t.to(self.device, non_blocking=True)
+        self.dict_embs.resize_(t.shape).copy_(t, non_blocking=True)
+
+
 
 
     def forward(self, x):
@@ -37,8 +44,9 @@ class RerankNet(nn.Module):
         # batch_size, topk, max_length = candidate_tokens['input_ids'].shape
 
         if self.use_cuda:
-            query_token['input_ids'] = query_token['input_ids'].to('cuda')
-            query_token['attention_mask'] = query_token['attention_mask'].to('cuda')
+            query_token['input_ids'] = query_token['input_ids'].to(self.device, non_blocking=True)
+            query_token['attention_mask'] = query_token['attention_mask'].to(self.device, non_blocking=True)
+
             # candidate_tokens['input_ids'] = candidate_tokens['input_ids'].to('cuda')
             # candidate_tokens['attention_mask'] = candidate_tokens['attention_mask'].to('cuda')
 
@@ -57,11 +65,22 @@ class RerankNet(nn.Module):
 
 
         # candidate_embeds = self.dict_embs[topk_cand_idxs]
+        topk_cand_idxs = torch.as_tensor(topk_cand_idxs, dtype=torch.long, device=self.device)
         B, K  = topk_cand_idxs.shape
-        flat = topk_cand_idxs.reshape(-1)
+
+        # handle padded -1 
+        valid_mask = topk_cand_idxs >= 0
+        idxs = topk_cand_idxs.clamp_min(0)
+
+
+        flat = idxs.reshape(-1)
         candidate_embs = self.dict_embs.index_select(0, flat).reshape(B, K, -1)
 
+        if not valid_mask.all():
+            candidate_embs = candidate_embs.masked_fill(~valid_mask.unsqueeze(-1), 0)
 
+        candidate_embs = candidate_embs.contiguous()
+        query_embed = query_embed.contiguous()
 
         score = torch.bmm(query_embed, candidate_embs.permute(0,2,1)).squeeze(1)
         return score
@@ -77,7 +96,7 @@ class RerankNet(nn.Module):
 
     def get_loss(self, outputs, targets):
         if self.use_cuda:
-            targets = targets.cuda()
+            targets = targets.cuda(non_blocking=True)
         loss = self.criterion(outputs, targets)
         return loss
 

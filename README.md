@@ -63,9 +63,17 @@ CPU use:
 $ conda install pytorch=2.6.0 cpuonly -c pytorch
 ```
 
+## vast ai gtx 4090 install torch and faiss:
+pip install --index-url https://download.pytorch.org/whl/cu121  torch
+
+
+-- Install Faiss GPU cu12 (brings cu12.1 runtime that now matches)
+pip install faiss-gpu-cu12
+
+
 ## Remaining packages
 ```bash
-$ conda install numpy tqdm transformers requests  -c conda-forge
+$ conda install tqdm transformers requests psutil  -c conda-forge
 $ conda install faiss-cpu -c conda-forge
 ```
 

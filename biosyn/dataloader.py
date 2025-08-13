@@ -47,7 +47,7 @@ class NamesDataset(torch.utils.data.Dataset):
     def __init__(self, encodings):
         self.encodings = encodings
     def __getitem__(self,idx):
-        return {key: torch.tensor(val[idx]) for key,val in self.encodings.items()}
+        return {key: val[idx] for key,val in self.encodings.items()}
     def __len__(self):
         return len(self.encodings.input_ids)
 
@@ -72,6 +72,9 @@ class CandidateDataset(torch.utils.data.Dataset):
         self.max_length = max_length
         self.topk = topk
         self.d_cand_idxs = None
+        self.dict_id_sets = None    
+
+
         self.pre_tokenize = pre_tokenize
         if pre_tokenize:
             all_query_names_tokens = self.tokenizer(self.query_names, max_length=max_length,padding='max_length', truncation=True, return_tensors='pt' )
@@ -88,6 +91,19 @@ class CandidateDataset(torch.utils.data.Dataset):
 
     def set_dense_candidate_idxs(self, d_cand_idxs):
         self.d_cand_idxs = d_cand_idxs
+        self.dict_ids_sets = [set(s.split("|")) if isinstance(s, str) else set(s) for s in self.dict_ids]
+        self.query_id_tokens = [tuple(q.split("|")) if isinstance(q, str) else tuple(q) for q in self.query_ids]
+
+        self.labels_per_query = []
+        for q_idx, cand_idxs in enumerate(self.d_cand_idxs):
+            q_id_tokens = self.query_id_tokens[q_idx]
+            labels = np.fromiter(
+                (1.0 if all(tok in self.dict_ids_sets[i] for tok in q_id_tokens) else 0.0 for i in cand_idxs),
+                dtype=np.float32,
+                count=len(cand_idxs)
+            )
+            self.labels_per_query.append(labels)
+
 
     def __getitem__(self, query_idx):
         """
@@ -109,7 +125,7 @@ class CandidateDataset(torch.utils.data.Dataset):
         topk_candidate_idx = np.array(d_cand_idxs)
 
         assert len(topk_candidate_idx) == self.topk
-        assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
+        # assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
 
 
         # if self.pre_tokenize:
@@ -123,8 +139,8 @@ class CandidateDataset(torch.utils.data.Dataset):
             # cand_names = [self.dict_names[cand_idx] for cand_idx in topk_candidate_idx]
             # cand_tokens = self.tokenizer(cand_names, max_length=self.max_length, padding="max_length" , truncation=True, return_tensors="pt")
 
-        labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
-
+        # labels = self.get_labels(query_idx, topk_candidate_idx).astype(np.float32)
+        labels = self.labels_per_query[query_idx]
         return (query_tokens, topk_candidate_idx), labels
 
 
@@ -154,3 +170,4 @@ class CandidateDataset(torch.utils.data.Dataset):
             label = self.check_label(query_id, candidate_id)
             labels = np.append(labels, label)
         return labels
+

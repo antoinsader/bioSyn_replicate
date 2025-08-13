@@ -1,0 +1,19 @@
+Logging file: ./data/output/logs/train/2025-08-13_02-34-26.log
+Using seed=0, pid=13370
+train_dictionary is loaded from file: ./data/data-ncbi-fair/train_dictionary.txt with minimize set to: False, the length is: 90599
+train_queries is loaded from file: ./data/data-ncbi-fair/traindev with minimize set to: False, the length is: 1798
+We are working on tier: gpu_l, gpu has native fp16 capability: True , num_workers=8
+Loading encoder from: dmis-lab/biobert-base-cased-v1.1
+Reranknet model is initiated with: learning_rate=1e-05,weight_decay=0.01, use_cuda=True 
+Candidate DS is initiated with len queries: 1798, len dicts: 90599, max_length: 25, topk: 20 
+The training will use faiss for score matrix
+Training will start at time: 1755052479.205586 and with 10 epochs
+[train] START
+[train] epoch_end | epoch=1 | loss=0.583731 | CPU_RSS=2008.8 MB| GPU_alloc=2197.9 MB (peak 2612.1) | GPU reserved 5852.0 MB (peak:  5852.0) | elapsed=7.93s
+[train] epoch_end | epoch=2 | loss=0.515399 | CPU_RSS=2304.3 MB| GPU_alloc=2197.3 MB (peak 5960.4) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=18.32s
+[train] epoch_end | epoch=3 | loss=0.370285 | CPU_RSS=2334.1 MB| GPU_alloc=2197.9 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=17.97s
+[train] epoch_end | epoch=4 | loss=0.307396 | CPU_RSS=2342.3 MB| GPU_alloc=2197.3 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=17.59s
+[train] epoch_end | epoch=5 | loss=0.981846 | CPU_RSS=2340.6 MB| GPU_alloc=2197.9 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=17.88s
+[train] epoch_end | epoch=6 | loss=2.101334 | CPU_RSS=2347.8 MB| GPU_alloc=2197.3 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=18.56s
+[train] epoch_end | epoch=7 | loss=1.366624 | CPU_RSS=2347.5 MB| GPU_alloc=2197.9 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=18.68s
+[train] epoch_end | epoch=8 | loss=0.836346 | CPU_RSS=2350.2 MB| GPU_alloc=2197.3 MB (peak 5961.2) | GPU reserved 7404.0 MB (peak:  7404.0) | elapsed=18.51s

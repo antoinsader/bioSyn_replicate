@@ -13,19 +13,17 @@ from utils import get_pkl, init_logging, init_seed, save_pkl
 from biosyn.rerank import RerankNet
 from torch.utils.data import DataLoader 
 import numpy as np
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-os.environ["KMP_VERBOSE"] = "1"
-
-MINIMIZE = True
-# TOP_K = 20
-TOP_K = 3
+MINIMIZE = False
+TOP_K = 20
 
 
 NUM_EPOCHS= 10
-TRAIN_BATCH_SIZE  = 16
+TRAIN_BATCH_SIZE  = 128
 
 MAX_LENGTH = 25
-USE_CUDA = False
+USE_CUDA = torch.cuda.is_available()
 LEARNING_RATE = 1e-5
 
 SAVE_CHKPNT_ALL =True
@@ -111,18 +109,37 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 
+def train_new(data_loader, model, has_fp16):
+    if model.use_cuda and has_fp16:
+        scaler = torch.amp.GradScaler('cuda')
+    train_loss = 0
+    train_steps = 0
+    model.train()
+    for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
+        model.optimizer.zero_grad()
+        batch_x, batch_y = data
+        if has_fp16 and model.use_cuda:
+            with torch.amp.autocast('cuda'):
+                batch_pred = model(batch_x)
+                loss = model.get_loss(batch_pred, batch_y)
+            scaler.scale(loss).backward()
+            scaler.step(model.optimizer)
+            scaler.update()
+        else:
+            batch_pred = model(batch_x)
+            loss = model.get_loss(batch_pred, batch_y)
+            loss.backward()
+            model.optimizer.step()
+        train_loss += loss.item()
+        train_steps += 1
+
+    train_loss /= (train_steps + 1e-9)
+    return train_loss
+    
+
 
 def main():
     args = parse_args()
-    if args.draft:
-        train_dictionary = train_dictionary[:100]
-        train_queries = train_queries[:10]
-        args.output_dir = args.output_dir + "_min"
-
-    init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
-    init_seed(LOGGER, args.seed)
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
 
     # np array containing each item is (cui, name)
     # N
@@ -130,8 +147,23 @@ def main():
 
     # np array containing each item is (cui, mention)
     # M
-    train_queries  = load_queries(data_dir=args.train_dir, filter_composite=False, filter_duplicates=False, filter_cuiless=True)
+    train_queries  = load_queries(data_dir=args.train_dir, filter_composite=False, filter_duplicates=True, filter_cuiless=True)
 
+
+
+    if args.draft:
+        train_dictionary = train_dictionary[:100]
+        train_queries = train_queries[:10]
+        args.output_dir = args.output_dir + "_min"
+
+
+
+    init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
+    init_seed(LOGGER, args.seed)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+ 
 
 
 
@@ -154,6 +186,7 @@ def main():
     names_in_train_queries = train_queries[:, 0] # M
 
     biosyn = BioSyn(args.max_length, args.use_cuda, args.topk)
+    LOGGER.info(f"We are working on tier: {biosyn.gpu_tier}, gpu has native fp16 capability: {biosyn.has_fp16} , num_workers={biosyn.num_workers}")
     LOGGER.info(f"Loading encoder from: {args.model_name_or_path}")
     biosyn.load_dense_encoder(args.model_name_or_path)
 
@@ -174,10 +207,11 @@ def main():
         pre_tokenize = args.pre_tokenize
     )
     LOGGER.info(f"Candidate DS is initiated with len queries: {len(train_queries)}, len dicts: {len(train_dictionary)}, max_length: {args.max_length}, topk: {args.topk} ")
-    LOGGER.info(f"The training will {'will not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
+    LOGGER.info(f"The training will {' not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
 
     if not args.not_use_faiss:
         #Building FAISS index outside the epochs loop
+        LOGGER.info(f"Building FAISS index for {len(names_in_train_dict)} names")
         dict_embs = biosyn.build_faiss_index(dict_names=names_in_train_dict)
         model.set_dictionary_embedings(dict_embs)
         
@@ -217,14 +251,20 @@ def main():
             train_dense_candidate_idxs = biosyn.retreive_cand_idxs_chunks(names_in_train_queries, mmap_file)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
 
-
-
-
+            pad_pct = 100.0 * (train_dense_candidate_idxs < 0).mean()
+            valid_k = float((train_dense_candidate_idxs >= 0).sum(axis=1).mean())
+            zero_pos_pct = 100.0 * np.mean([lbls.sum() == 0 for lbls in train_set.labels_per_query])
+            LOGGER.info(f"[epoch {epoch}] pad%={pad_pct:.2f} | valid_k={valid_k:.1f}/{args.topk} | zero_pos%={zero_pos_pct:.2f}")
 
         train_loader = DataLoader(
-            train_set, batch_size=args.train_batch_size, shuffle=False
+            train_set, batch_size=args.train_batch_size, 
+            shuffle=False, 
+            num_workers=max(2, (os.cpu_count() or 2) // 2),
+            pin_memory=args.use_cuda,
+            persistent_workers=args.use_cuda
         )
-        train_loss = train(data_loader=train_loader, model=model)
+        # train_loss = train(data_loader=train_loader, model=model)
+        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16)
         # LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
         metrics.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
 
