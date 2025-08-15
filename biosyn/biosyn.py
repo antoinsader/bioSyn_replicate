@@ -239,16 +239,24 @@ class BioSyn(object):
             )
         name_dataset = NamesDataset(name_tokens)
         # add pin memory and num_workers and persistent system = true
-        
-        data_loader = DataLoader(
-            name_dataset,
-            shuffle=False,
-            collate_fn=default_data_collator,
-            batch_size=batch_size,
-            pin_memory=self.use_cuda,
-            num_workers=self.num_workers,
-            persistent_workers=self.use_cuda
-        )
+        if self.use_cuda:
+            data_loader = DataLoader(
+                name_dataset,
+                shuffle=False,
+                collate_fn=default_data_collator,
+                batch_size=batch_size,
+                pin_memory=True,
+                num_workers=self.num_workers,
+                persistent_workers=True
+            )
+        else:
+            #sader
+            data_loader = DataLoader(
+                name_dataset,
+                shuffle=False,
+                collate_fn=default_data_collator,
+                batch_size=batch_size
+            )
 
         N = len(names)
         H = getattr(getattr(self.encoder, "config", None), "hidden_size", None)
@@ -257,7 +265,7 @@ class BioSyn(object):
             out_gpu = torch.empty((N,H), dtype=dtype, device=self.device)
         else:
             # pinned cpu tensor and expose it as numpy at the end
-            out_cpu = torch.empty((N,H), dtype=torch.float32, pin_memory=True)
+            out_cpu = torch.empty((N,H), dtype=torch.float32, pin_memory=self.use_cuda)
 
         self.encoder.eval()
         idx = 0
@@ -343,14 +351,15 @@ class BioSyn(object):
             else:
                 I = I.astype(np.int32, copy=False)
 
-            I_topk = np.full((I.shape[0], self.topk), -1, dtype=np.int32)
-            for r, row in enumerate(I):
-                # indices of first occurrence in the original order
-                first_idx = np.unique(row, return_index=True)[1]
-                u = row[np.sort(first_idx)][:self.topk]   # preserve FAISS order, trim to topk
-                I_topk[r, :u.size] = u
+            # I_topk = np.full((I.shape[0], self.topk), -1, dtype=np.int32)
+            # for r, row in enumerate(I):
+            #     # indices of first occurrence in the original order
+            #     first_idx = np.unique(row, return_index=True)[1]
+            #     u = row[np.sort(first_idx)][:self.topk]   # preserve FAISS order, trim to topk
+            #     I_topk[r, :u.size] = u
+            # indexes_all[offset:offset + (end-start)] = I_topk
 
-            indexes_all[offset:offset + (end-start)] = I_topk
+            indexes_all[offset:offset + (end-start)] = I
             offset = end
 
         indexes_all.flush()

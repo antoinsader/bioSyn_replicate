@@ -125,7 +125,7 @@ class CandidateDataset(torch.utils.data.Dataset):
         topk_candidate_idx = np.array(d_cand_idxs)
 
         assert len(topk_candidate_idx) == self.topk
-        # assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
+        assert len(topk_candidate_idx) == len(set(topk_candidate_idx))
 
 
         # if self.pre_tokenize:
