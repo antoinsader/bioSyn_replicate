@@ -13,6 +13,8 @@ from utils import get_pkl, init_logging, init_seed, save_pkl
 from biosyn.rerank import RerankNet
 from torch.utils.data import DataLoader 
 import numpy as np
+
+
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 MINIMIZE = False
@@ -33,6 +35,7 @@ ENCODER_MODEL_NAME = 'dmis-lab/biobert-base-cased-v1.1' #Dense encoder model nma
 TRAIN_DICT_PATH = "./data/data-ncbi-fair/train_dictionary.txt"
 TRAIN_DIR = "./data/data-ncbi-fair/traindev"
 OUTPUT_DIR = "./data/output"
+OUTPUT_OTHERS_DIR = "./data/otheres"
 WEIGHT_DECAY = 0.01
 
 
@@ -109,13 +112,16 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 
-def train_new(data_loader, model, has_fp16):
+def train_new(data_loader, model, has_fp16, epoch_num, pkls_dir=None):
     if model.use_cuda and has_fp16:
         scaler = torch.amp.GradScaler('cuda')
     train_loss = 0
     train_steps = 0
     model.train()
-    for i, data in tqdm(enumerate(data_loader), total=len(data_loader)):
+
+    saved_batches = []
+
+    for i, data in tqdm(enumerate(data_loader), total=len(data_loader), desc="training", unit="epochs"):
         model.optimizer.zero_grad()
         batch_x, batch_y = data
         if has_fp16 and model.use_cuda:
@@ -133,6 +139,23 @@ def train_new(data_loader, model, has_fp16):
         train_loss += loss.item()
         train_steps += 1
 
+
+        if pkls_dir:
+            with torch.no_grad():
+                to_save = {
+                    "epoch": epoch_num,
+                    "y": batch_y.detach().cpu(),
+                    "pred": batch_pred.detach().cpu(),
+                    "x": batch_x
+                }
+            saved_batches.append(to_save)
+
+
+    if pkls_dir:
+        save_pkl(saved_batches, pkls_dir + f"/epoch_{epoch_num}_results.pkl")
+
+
+    LOGGER.info(f"Epoch num: {epoch_num} has did loss: {train_loss}")
     train_loss /= (train_steps + 1e-9)
     return train_loss
     
@@ -158,37 +181,40 @@ def main():
 
 
 
-    init_logging(LOGGER, base_output_dir= args.output_dir, logging_folder="train", minimize=args.draft)
-    init_seed(LOGGER, args.seed)
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
- 
+    if not os.path.exists(OUTPUT_OTHERS_DIR):
+        os.makedirs(OUTPUT_OTHERS_DIR)
+
+    mmap_dir = OUTPUT_OTHERS_DIR +  "/mmap_embeds"
+    os.makedirs(mmap_dir, exist_ok=True)
+
+    pkls_dir = OUTPUT_OTHERS_DIR +  "/pkls"
+    os.makedirs(pkls_dir, exist_ok=True)
+
+    init_logging(LOGGER, base_output_dir= OUTPUT_OTHERS_DIR, logging_folder="train", minimize=args.draft)
+    init_seed(LOGGER, args.seed)
 
 
 
     LOGGER.info(f"train_dictionary is loaded from file: {args.train_dictionary_path} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_dictionary)}")
     LOGGER.info(f"train_queries is loaded from file: {args.train_dir} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_queries)}")
 
+
+    save_pkl(train_dictionary, f"{pkls_dir}/train_dictionary.pkl")
+    save_pkl(train_queries, f"{pkls_dir}/train_queries.pkl")
     # train_dictionary = get_pkl("./data/train_dict.pkl")
     # train_queries = get_pkl("./data/train_queries.pkl")
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-
-    mmap_dir = args.output_dir + "/mmap_files"
-    if not os.path.exists(mmap_dir):
-        os.makedirs(mmap_dir)
 
 
     names_in_train_dict = train_dictionary[:, 0] # N
     names_in_train_queries = train_queries[:, 0] # M
 
-    biosyn = BioSyn(args.max_length, args.use_cuda, args.topk)
+    biosyn = BioSyn(args.max_length, args.use_cuda, args.topk, args.model_name_or_path)
     LOGGER.info(f"We are working on tier: {biosyn.gpu_tier}, gpu has native fp16 capability: {biosyn.has_fp16} , num_workers={biosyn.num_workers}")
-    LOGGER.info(f"Loading encoder from: {args.model_name_or_path}")
-    biosyn.load_dense_encoder(args.model_name_or_path)
+    LOGGER.info(f"Encoder loaded from: {args.model_name_or_path}")
 
     model = RerankNet(
         encoder=biosyn.encoder,
@@ -209,13 +235,6 @@ def main():
     LOGGER.info(f"Candidate DS is initiated with len queries: {len(train_queries)}, len dicts: {len(train_dictionary)}, max_length: {args.max_length}, topk: {args.topk} ")
     LOGGER.info(f"The training will {' not use faiss for score matrix' if  args.not_use_faiss else 'use faiss for score matrix'}")
 
-    if not args.not_use_faiss:
-        #Building FAISS index outside the epochs loop
-        LOGGER.info(f"Building FAISS index for {len(names_in_train_dict)} names")
-        dict_embs = biosyn.build_faiss_index(dict_names=names_in_train_dict)
-        model.set_dictionary_embedings(dict_embs)
-        
-
     start = time.time()
     LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
     metrics = MetricsLogger(
@@ -224,9 +243,7 @@ def main():
         tag="train"
     )
     metrics.start_run()
-    #for epoch
     for epoch in tqdm(range(1,args.epoch+1)):
-        # LOGGER.info("Epoch {}/{}".format(epoch,args.epoch))
         t_epoch = time.time()
 
 
@@ -244,27 +261,35 @@ def main():
             # replace dense candidates in the train_set
             train_set.set_dense_candidate_idxs(d_candidate_idxs=train_dense_candidate_idxs)
         else:
-            if epoch > 1:
-                dict_embs  = biosyn.update_faiss_index(dict_names=names_in_train_dict)
-                model.set_dictionary_embedings(dict_embs)
-            mmap_file = os.path.join(mmap_dir, f"cand_idxs_epoch_{epoch}.mmap")
-            train_dense_candidate_idxs = biosyn.retreive_cand_idxs_chunks(names_in_train_queries, mmap_file)
+            # dict_mmap_base = mmap_dir + f"/dicts_{epoch}"
+            # dict_mmap_path, dict_meta = biosyn.embed_names_mmap(names=names_in_train_dict, memap_path_base=dict_mmap_base)
+
+            queries_mmap_base = mmap_dir + f"/queries_{epoch}"
+            queries_mmap_path, queries_meta = biosyn.embed_names_mmap(names=names_in_train_queries, memap_path_base=queries_mmap_base)
+
+            # save the index if we want after
+            faiss_index = biosyn.build_faiss_index(dict_names=names_in_train_dict)
+
+
+            # dtype = np.float16 if dict_meta["dtype"] == "fp16" else np.float32
+            # dict_mm = np.memmap(dict_meta["path"], mode="r", dtype=dtype, shape=(dict_meta["N"], dict_meta["d"]))
+            # model.set_dictionary_embedings(dict_mm)
+
+
+            results_mmap_base = mmap_dir + f"/results_{epoch}"
+            train_dense_candidate_idxs = biosyn.search_index_mmap(queries_mmap_base=queries_mmap_base , save_results_mmap_base=results_mmap_base)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
 
-            pad_pct = 100.0 * (train_dense_candidate_idxs < 0).mean()
-            valid_k = float((train_dense_candidate_idxs >= 0).sum(axis=1).mean())
-            zero_pos_pct = 100.0 * np.mean([lbls.sum() == 0 for lbls in train_set.labels_per_query])
-            LOGGER.info(f"[epoch {epoch}] pad%={pad_pct:.2f} | valid_k={valid_k:.1f}/{args.topk} | zero_pos%={zero_pos_pct:.2f}")
 
         train_loader = DataLoader(
             train_set, batch_size=args.train_batch_size, 
-            shuffle=False, 
-            num_workers=max(2, (os.cpu_count() or 2) // 2),
+            shuffle=False,
+            num_workers=min(4, (os.cpu_count() // 2 or 2)),
             pin_memory=args.use_cuda,
             persistent_workers=args.use_cuda
         )
         # train_loss = train(data_loader=train_loader, model=model)
-        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16)
+        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16, epoch_num=epoch, pkls_dir=pkls_dir)
         # LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
         metrics.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
 

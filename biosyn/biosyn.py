@@ -8,34 +8,16 @@ from transformers import default_data_collator, AutoModel, AutoTokenizer
 
 
 from .dataloader import NamesDataset
+from utils import get_gpu_tier, embed_dense_batch_size
 
 import faiss
-try:
-    import faiss.contrib.torch_utils  # <- enables add/search with torch tensors
-    _FAISS_TORCH_OK = True
-except Exception:
-    _FAISS_TORCH_OK = False
+import faiss.contrib.torch_utils
+import json
+import torch.nn.functional as F
 
-def _faiss_ready(x, want_gpu: bool):
-    """
-    Return x in the optimal form for faiss.{add,search}:
-      - GPU index  -> prefer torch.cuda.FloatTensor (requires torch_utils)
-      - CPU index  -> NumPy float32 C-contiguous
-    """
-    if want_gpu and _FAISS_TORCH_OK and torch.is_tensor(x):
-        if x.device.type != "cuda":
-            x = x.to("cuda", non_blocking=True)
-        if x.dtype != torch.float32:
-            x = x.to(torch.float32, copy=False)
-        return x
-    # Fallback: CPU NumPy float32
-    if torch.is_tensor(x):
-        return x.detach().to("cpu", non_blocking=True).contiguous().numpy().astype("float32", copy=False)
-    return np.asarray(x, dtype=np.float32, order="C")
-
-
+ 
 class BioSyn(object):
-    def __init__(self, max_length, use_cuda, topk):
+    def __init__(self, max_length, use_cuda, topk, model_name_path):
         self.max_length = max_length
         self.use_cuda = use_cuda
         self.topk = topk
@@ -44,10 +26,10 @@ class BioSyn(object):
         self.faiss_index = None
 
         #know the tier between (cpu, gpu_s, gpu_m, gpu_l, gpu_xl)
-        self.gpu_tier, self.has_fp16 = self.get_gpu_tier()
-        self.num_workers=min(4, os.cpu_count() // 2)
+        self.gpu_tier, self.has_fp16 = get_gpu_tier()
+        self.num_workers=min(4, os.cpu_count())
         self.device = torch.device("cuda" if self.use_cuda else "cpu")
-
+        self.load_dense_encoder(model_name_path)
 
     def get_dense_encoder(self):
         assert (self.encoder is not None)
@@ -167,70 +149,14 @@ class BioSyn(object):
             dense_embeds = np.concatenate(dense_embeds, axis=0)
         return dense_embeds
 
-    def get_gpu_tier(self):
-        """
-            return (cpu_tier, has_fp16)
-            cpu_tier is one of ["cpu", "gpu_s", "gpu_m", "gpu_l", "gpu_xl"]
-        """
-        if not self.use_cuda:
-            return  "cpu", False
-
-        props = torch.cuda.get_device_properties(0)
-        vram_gb = props.total_memory / (1024 ** 3)
-
-        major, _ = torch.cuda.get_device_capability(0)
-        has_fp16= major >= 7
-
-        if vram_gb < 6:
-            return "gpu_s", has_fp16
-        elif vram_gb < 16:
-            return "gpu_m", has_fp16
-        elif vram_gb < 32:
-            return "gpu_l" , has_fp16
-        else:
-            return "gpu_xl", has_fp16
-
-    def dense_names_batch_size(self,len_names):
-        if self.gpu_tier == "cpu":
-            base = 256 if self.max_length <= 128 else 64
-        elif self.gpu_tier == "gpu_s":
-            base = 512 if self.max_length <=128 else 128
-        elif self.gpu_tier == "gpu_m":
-            base = 2048 if self.max_length <=128 else 512
-        elif self.gpu_tier == "gpu_l":
-            base = 2048 if self.max_length <=128 else 512
-        else:
-            base = 8192 if self.max_length <=128 else 2048
-
-        base = int(base * 1.3)
-
-        base = max(1, min(base, int(len_names) ))
-        return base
-
-    def search_faiss_chunk_size(self, M):
-        if self.gpu_tier == "cpu":
-            base =  8192
-        elif self.gpu_tier == "gpu_s":
-            base = 1024
-        elif self.gpu_tier == "gpu_m":
-            base =  4096
-        elif self.gpu_tier == "gpu_l":
-            base = 8192*2
-        else:
-            base =  16384
-        if self.use_cuda and self.has_fp16:
-            base = int(base * 1.3)
-        base = min(base, max(M, 1))
-        base = max(256, (base //  256) * 256)
-        return int(base)
 
 
-    def embed_dense_opt(self, names, keep_gpu=False, dtype=torch.float32):
-        batch_size = self.dense_names_batch_size(len(names))
+    def embed_dense_optimized(self, names, return_tensor=False):
+        batch_size = embed_dense_batch_size(len(names), self.gpu_tier)
         if isinstance(names, np.ndarray):
             names = names.tolist()
         assert isinstance(names, (list, tuple)) and len(names) > 0
-        
+
         name_tokens = self.tokenizer(names,
                 padding="max_length",
                 max_length=self.max_length,
@@ -238,7 +164,8 @@ class BioSyn(object):
                 return_tensors="pt"
             )
         name_dataset = NamesDataset(name_tokens)
-        # add pin memory and num_workers and persistent system = true
+
+
         if self.use_cuda:
             data_loader = DataLoader(
                 name_dataset,
@@ -246,11 +173,10 @@ class BioSyn(object):
                 collate_fn=default_data_collator,
                 batch_size=batch_size,
                 pin_memory=True,
-                num_workers=self.num_workers,
-                persistent_workers=True
+                num_workers=0,
+                persistent_workers=False
             )
         else:
-            #sader
             data_loader = DataLoader(
                 name_dataset,
                 shuffle=False,
@@ -258,109 +184,209 @@ class BioSyn(object):
                 batch_size=batch_size
             )
 
-        N = len(names)
-        H = getattr(getattr(self.encoder, "config", None), "hidden_size", None)
-        assert H is not None
-        if keep_gpu:
-            out_gpu = torch.empty((N,H), dtype=dtype, device=self.device)
-        else:
-            # pinned cpu tensor and expose it as numpy at the end
-            out_cpu = torch.empty((N,H), dtype=torch.float32, pin_memory=self.use_cuda)
 
-        self.encoder.eval()
+        N, H  = len(names), getattr(getattr(self.encoder, "config", None), "hidden_size", None)
+        if return_tensor and self.use_cuda:
+            out = torch.empty((N,H), dtype=np.float16, device=self.device)
+        else:
+            out = torch.empty((N,H), dtype=torch.float32, pin_memory=self.use_cuda)
+
         idx = 0
         with torch.no_grad():
             if self.use_cuda:
                 with torch.amp.autocast('cuda'):
                     for batch in data_loader:
                         batch  = {k: v.cuda(non_blocking=True) for  k, v in batch.items()}
-                        outs = self.encoder(**batch)
-                        embs = outs[0][:, 0] #cls representation [B, H]
-                        if embs.dtype != dtype:
-                            embs = embs.to(dtype, copy=False)
-                        B = embs.shape[0]
+                        enc_out = self.encoder(**batch)
+                        embs = enc_out[0][:, 0] # B, H  (CLS)
+                        if embs.dtype != torch.float16:
+                            embs = embs.to(dtype=torch.float16, copy=False)
+                        B = embs.shape[0] #B
                         j = idx + B
 
-                        if keep_gpu:
-                            out_gpu[idx:j].copy_(embs, non_blocking=True)
-                        else:
-                            out_cpu[idx:j].copy_(embs, non_blocking=True)
+                        out[idx:j].copy_(embs, non_blocking=True)
                         idx = j
             else:
                 for batch in data_loader:
-                    outs = self.encoder(**batch)
-                    embs = outs[0][:, 0] #cls representation [B, H]
-                    if embs.dtype != dtype:
-                        embs = embs.to(dtype, copy=False)
+                    enc_outs = self.encoder(**batch)
+                    embs = enc_outs[0][:, 0]
                     B = embs.shape[0]
                     j = idx + B
-
-                    if keep_gpu:
-                        out_gpu[idx:j].copy_(embs, non_blocking=True)
-                    else:
-                        out_cpu[idx:j].copy_(embs, non_blocking=True)
+                    out[idx:j].copy_(embs, non_blocking=True)
                     idx = j
-                
-        if keep_gpu:
-            return out_gpu
+        return out if return_tensor else out.numpy()
+
+
+    
+    def embed_names_mmap(self, names, memap_path_base, batch_size=8192):
+
+        os.makedirs(os.path.dirname(memap_path_base), exist_ok=True)
+
+        #small batch to get d
+        names_0 = names[:min(32, len(names))]
+        embs_0 = self.embed_dense_optimized(names_0, return_tensor=False)
+        assert not torch.is_tensor(embs_0)
+        d = int(embs_0.shape[1])
+
+        dtype = np.float16 if self.has_fp16 else np.float32
+        dtype_str = "fp16" if self.has_fp16 else "fp32"
+
+        #create meta data file
+        mmap_path = memap_path_base + f".{dtype_str}.mmap"
+        mm = np.memmap(mmap_path, mode="w+", dtype=dtype, shape=(len(names), d))
+
+
+
+        meta = {"N": len(names), "d":d, "dtype": dtype_str, "path": mmap_path}
+
+
+        with open(memap_path_base + ".json", "w") as f:
+            json.dump(meta, f)
+
+        #start writing stream
+        offset = 0
+        with tqdm(total=len(names), desc="embedding names") as pbar:
+            for s in range(0, len(names), batch_size):
+                e = min(s+batch_size, len(names) )
+                embs = self.embed_dense_optimized(names[s:e], return_tensor=False)
+                assert not torch.is_tensor(embs)
+                mm[offset:offset+(e-s)] = embs.astype(dtype, copy=False)
+                offset = e
+                pbar.update(e-s)
+                # del embs
+
+        mm.flush()
+        del mm
+        return mmap_path, meta
+
+    def build_faiss_index(self, dict_names , batch_size=128_000):
+
+        # H is the hidden size of our encoder (usually 768)
+        H = getattr(getattr(self.encoder, "config", None), "hidden_size", None)
+        assert H is not None
+
+
+        #build main index
+        if self.use_cuda:
+            gpu_resources = faiss.StandardGpuResources()
+            #Index configurations
+            cfg = faiss.GpuIndexFlatConfig()
+            cfg.device = torch.cuda.current_device()
+            cfg.useFloat16 = bool(self.has_fp16)
+
+            #make the index (this index is on gpu)
+            index = faiss.GpuIndexFlatIP(gpu_resources, H, cfg)
         else:
-            return out_cpu.numpy()
+            #make normal cpu index 
+            index = faiss.IndexFlatIP(H)
 
+        # disable autograd
+        self.encoder.eval()
+        with torch.inference_mode():
+            dict_names_embs = self.embed_dense_optimized(dict_names, return_tensor=True)
 
+            if self.use_cuda:
+                dict_names_embs = dict_names_embs.to("cuda", non_blocking=True).float()
+            else:
+                dict_names_embs = dict_names_embs.to("cpu").float().numpy()
 
+            N = dict_names_embs.shape[0]
+            with tqdm(total = len(dict_names) , desc="embeding & building FAISS index") as pbar:
+                #add dict names embeddings into the index in batches
+                for start in range(0, N, batch_size):
+                    end = min(start + batch_size, N)
+                    if self.use_cuda:
+                        chunk = dict_names_embs[start:end].contiguous()
+                    else:
+                        chunk = dict_names_embs[start:end]
+                    index.add(chunk)
 
-    def build_faiss_index(self, dict_names):
-        dict_embs = self.embed_dense_opt(names=dict_names, keep_gpu=self.use_cuda)
-        d= dict_embs.shape[1]
+                    pbar.update(end - start)
+                    del chunk
+            del dict_names_embs
+
+        self.faiss_index = index
+        return
+
+    def build_faiss_index_mmap(self, mmap_base):
+        chunk = 12288
+
+        #open meta json
+        with open(mmap_base + ".json") as f:
+            meta = json.load(f)
+
+        N, d = meta["N"], meta["d"]
+        dtype = np.float16 if meta["dtype"] == "fp16" else np.float32
+
+        #open mmap read-only
+        mm = np.memmap(meta["path"], mode="r", dtype=dtype, shape=(N,d))
+
+        #build index
         if self.use_cuda:
             res = faiss.StandardGpuResources()
             cfg = faiss.GpuIndexFlatConfig()
             cfg.device = torch.cuda.current_device()
-            cfg.useFloat16 = True
-            base = faiss.GpuIndexFlatIP(res, d, cfg)
+            cfg.useFloat16 = bool(self.has_fp16)
+            index = faiss.GpuIndexFlatIP(res, d, cfg)
         else:
-            base = faiss.IndexFlatIP(d)
-        base.add(_faiss_ready(dict_embs, want_gpu=self.use_cuda ))
-        self.faiss_index = base
-        return dict_embs
-
-    def update_faiss_index(self, dict_names):
-        dict_embs = self.embed_dense_opt(names=dict_names, keep_gpu=self.use_cuda)
-        d= dict_embs.shape[1]
-        self.faiss_index.reset()
-        self.faiss_index.add(_faiss_ready(dict_embs, want_gpu=self.use_cuda))
-        return dict_embs
+            index = faiss.IndexFlatIP(d)
 
 
-    def retreive_cand_idxs_chunks(self, queries_names, mmap_path):
-        M = len(queries_names)
-        _topk_here = int(self.topk * 10)
-        shape = (M, self.topk)
-        indexes_all = np.memmap(mmap_path, mode="w+", dtype=np.int32, shape=shape)
+        #stream add to dict in chunks
+        with tqdm(total=N, desc="Faiss index build") as pbar:
+            for start in range(0, N, chunk):
+                e = min(start+chunk, N)
+                part = mm[start:e]
+                t = torch.from_numpy(part).float()
+                if self.use_cuda:
+                    t = t.pin_memory().to("cuda", non_blocking=True)
+                index.add(t)
+                del t
+                if self.use_cuda:
+                    torch.cuda.synchronize()
+                pbar.update(e-start)
+        self.faiss_index = index
+        return index
 
-        chunk_size = self.search_faiss_chunk_size(M)
-        #stream queries
-        offset = 0
-        for start in range(0, M, chunk_size):
-            end = min(start + chunk_size, M)
-            batch_queries = queries_names[start:end]
-            q = self.embed_dense_opt(batch_queries, keep_gpu=self.use_cuda)
-            _, I = self.faiss_index.search(q,_topk_here)
+    def search_index_mmap(self, queries_mmap_base, save_results_mmap_base):
+        batch_size = 1024
+        with open(queries_mmap_base + ".json") as f:
+            meta = json.load(f)
+
+        M, d = meta["N"], meta["d"]
+        dtype = np.float16 if meta["dtype"] == "fp16" else np.float32
+
+        mm = np.memmap(meta["path"], mode="r", dtype=dtype, shape=(M,d))
+
+
+        mm_I = None
+        if save_results_mmap_base:
+            mm_path = save_results_mmap_base + ".mmap"
+            mm_I = np.memmap(mm_path, mode="w+", dtype=np.int32, shape=(M, self.topk) )
+            meta = {"N": M, "d":self.topk, "dtype": "int32", "path": mm_path}
+            with open(save_results_mmap_base + ".json", "w") as f:
+                json.dump(meta, f)
+
+
+        I_all = []
+        for s in range(0, M, batch_size):
+            e = min(s+batch_size, M)
+            q_part = mm[s:e]
+            t = torch.from_numpy(q_part).float()
+            if isinstance(self.faiss_index, faiss.GpuIndex):
+                t = t.pin_memory().to("cuda", non_blocking=True)
+            _, I = self.faiss_index.search(t, self.topk)
+
             if torch.is_tensor(I):
-                I = I.to(dtype=torch.int32, device="cpu", non_blocking=True).numpy()
-            else:
-                I = I.astype(np.int32, copy=False)
+                I = I.cpu().numpy()
 
-            # I_topk = np.full((I.shape[0], self.topk), -1, dtype=np.int32)
-            # for r, row in enumerate(I):
-            #     # indices of first occurrence in the original order
-            #     first_idx = np.unique(row, return_index=True)[1]
-            #     u = row[np.sort(first_idx)][:self.topk]   # preserve FAISS order, trim to topk
-            #     I_topk[r, :u.size] = u
-            # indexes_all[offset:offset + (end-start)] = I_topk
+            if mm_I is not None:
+                mm_I[s:e] = I
 
-            indexes_all[offset:offset + (end-start)] = I
-            offset = end
+            I_all.append(I)
 
-        indexes_all.flush()
-        return indexes_all
+        if mm_I is not None:
+            mm_I.flush()
+        return np.vstack(I_all)
+
+

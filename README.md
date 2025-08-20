@@ -13,13 +13,15 @@ For setup, you can use Conda or pip with venv, for windows I recommend using Con
 $ python -m venv myenv
 ```
 
-### Activate virtual environment (windows)
+### Activate virtual environment 
+
+- Windows:
 
 ```bash
 $ ./myenv/Scripts/activate
 ```
 
-### Activate virtual environment (linux)
+- Linux:
 
 ```bash
 $ source ./myenv/bin/activate
@@ -27,60 +29,34 @@ $ source ./myenv/bin/activate
 
 ### Install requirements
 
+Requirement libraries are:
+- tqdm
+- transformers
+- requests
+- psutil
 
+- torch 
+- faiss
+
+For torch:
+- if you are using cuda-12:
 ```bash
-$ pip install torch
-$ pip install tqdm transformers requests
-$ pip install faiss-cpu
+    pip install --index-url https://download.pytorch.org/whl/cu121  torch
 ```
 
-If you're using linux and cuda, you can install faiss-gpu instead of faiss-cpu
+
+For FAISS:
+- If you use cpu:
 ```bash
-$ conda install faiss-gpu -c pytorch
+    pip install faiss-cpu
+```
+- If you use cuda 12:
+```bash
+    pip install faiss-gpu-cu12
 ```
 
 
-## Setup using Conda
 
-### Create virtual environment:
-
-```bash
-$ conda create -n bsn python=3.9 -y
-$ conda activate bsn
-```
-
-## Install torch:
-
-Gpu use:
-
-```bash
-$ conda install pytorch pytorch-cuda=12.1 -c pytorch -c nvidia
-```
-
-CPU use:
-
-```bash
-$ conda install pytorch=2.6.0 cpuonly -c pytorch
-```
-
-## vast ai gtx 4090 install torch and faiss:
-pip install --index-url https://download.pytorch.org/whl/cu121  torch
-
-
--- Install Faiss GPU cu12 (brings cu12.1 runtime that now matches)
-pip install faiss-gpu-cu12
-
-
-## Remaining packages
-```bash
-$ conda install tqdm transformers requests psutil  -c conda-forge
-$ conda install faiss-cpu -c conda-forge
-```
-
-If you are using linux and cuda, you can install faiss-gpu instead of faiss-cpu:
-```bash
-$ conda install faiss-gpu -c pytorch
-```
 
 
 
@@ -105,10 +81,10 @@ it will contain:
 - test_dictionary.txt
 - train_dictionary.txt
 
-<!-- ## Use fair data evaluation
-
+### Use fair data evaluation
 In the folder data/data-ncbi-fair we have training/testing data for fair training and evaluation 
 In the folder data/ncbi-disease-normal (could be the data you download using download_ds.py) having the normal data biosyn is training on -->
+
 
 ## Train
 
