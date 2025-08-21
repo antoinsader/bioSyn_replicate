@@ -11,11 +11,12 @@ class MetricsLogger:
         self.max_rss_mb =0.0
         self.logger = logger
         self.tag =tag
-    def rss_mb(self):
+        self.messages = []
+    def _rss_mb(self):
         rss = self.proc.memory_info().rss / (1024 ** 2)
         self.max_rss_mb = max(self.max_rss_mb, rss)
         return rss
-    def gpu_numbers(self):
+    def _gpu_numbers(self):
         if not self.use_cuda:
             return (None, None, None, None)
         torch.cuda.synchronize(self.device)
@@ -30,12 +31,12 @@ class MetricsLogger:
             torch.cuda.reset_peak_memory_stats(self.device)
         self.logger.info(f"[{self.tag}] START")
 
-    def log_event(self, event, epoch, loss, t0):
+    def log_event(self, event, epoch=None, loss=None, t0= None):
         if self.start_ts is None:
             self.start_ts = time.time()
         wall = (time.time() - (t0 if t0 is not None else self.start_ts))
-        rss = self.rss_mb()
-        g_alloc, g_peak, g_res, g_res_peak  = self.gpu_numbers()
+        rss = self._rss_mb()
+        g_alloc, g_peak, g_res, g_res_peak  = self._gpu_numbers()
         msg = f"[{self.tag}] {event}"
         if epoch is not None:
             msg += f" | epoch={epoch}"
@@ -45,12 +46,15 @@ class MetricsLogger:
         if self.use_cuda:
             msg += f"| GPU_alloc={g_alloc:.1f} MB (peak {g_peak:.1f}) | GPU reserved {g_res:.1f} MB (peak: {g_res_peak: .1f})" 
         msg += f" | elapsed={wall:.2f}s"
-        self.logger.info(msg)
+        self.messages.append(msg)
+
 
     def end_run(self):
         total = time.time() - self.start_ts if self.start_ts else 0.0
+        self.logger.info(self.messages)
+        
          # read final GPU peaks (since start_run)
-        _, g_peak, _, g_res_peak = self.gpu_numbers()
+        _, g_peak, _, g_res_peak = self._gpu_numbers()
         summary = (f"[{self.tag}] END | total={total:.2f}s  | CPU_peak_RSS={self.max_rss_mb:.1f} MB")
         if self.use_cuda:
             summary += (f" | GPU_peak_alloc={g_peak:.1f} MB "

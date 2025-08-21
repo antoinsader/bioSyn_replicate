@@ -89,6 +89,7 @@ def parse_args():
 
     parser.add_argument('--not_use_faiss',  action="store_true", default=NOT_USE_FAISS)
     parser.add_argument('--pre_tokenize',  action="store_true", default=PRE_TOKENIZE)
+    parser.add_argument('--forward_chunk_size', default=64, type=int)
 
 
     args = parser.parse_args()
@@ -112,7 +113,7 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 
-def train_new(data_loader, model, has_fp16, epoch_num, pkls_dir=None):
+def train_new(data_loader, model, has_fp16, epoch_num, metrics_train, pkls_dir=None):
     if model.use_cuda and has_fp16:
         scaler = torch.amp.GradScaler('cuda')
     train_loss = 0
@@ -193,6 +194,9 @@ def main():
     pkls_dir = OUTPUT_OTHERS_DIR +  "/pkls"
     os.makedirs(pkls_dir, exist_ok=True)
 
+
+
+
     init_logging(LOGGER, base_output_dir= OUTPUT_OTHERS_DIR, logging_folder="train", minimize=args.draft)
     init_seed(LOGGER, args.seed)
 
@@ -209,6 +213,17 @@ def main():
 
 
 
+    metrics_train = MetricsLogger(
+        logger=LOGGER,
+        use_cuda=args.use_cuda,
+        tag="train"
+    )
+    metrics_faiss = MetricsLogger(
+        logger=LOGGER,
+        use_cuda=args.use_cuda,
+        tag="faiss"
+    )
+
     names_in_train_dict = train_dictionary[:, 0] # N
     names_in_train_queries = train_queries[:, 0] # M
 
@@ -220,7 +235,9 @@ def main():
         encoder=biosyn.encoder,
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
-        use_cuda=args.use_cuda
+        use_cuda=args.use_cuda,
+        forward_chunk_size=args.forward_chunk_size,
+        metrics_train=metrics_train,
     )
     LOGGER.info(f"Reranknet model is initiated with: learning_rate={args.learning_rate},weight_decay={args.weight_decay}, use_cuda={args.use_cuda} ")
 
@@ -237,12 +254,8 @@ def main():
 
     start = time.time()
     LOGGER.info(f"Training will start at time: {start} and with {args.epoch} epochs")
-    metrics = MetricsLogger(
-        logger=LOGGER,
-        use_cuda=args.use_cuda,
-        tag="train"
-    )
-    metrics.start_run()
+
+    metrics_train.start_run()
     for epoch in tqdm(range(1,args.epoch+1)):
         t_epoch = time.time()
 
@@ -263,21 +276,26 @@ def main():
         else:
             # dict_mmap_base = mmap_dir + f"/dicts_{epoch}"
             # dict_mmap_path, dict_meta = biosyn.embed_names_mmap(names=names_in_train_dict, memap_path_base=dict_mmap_base)
-
+            dict_mmap_base = mmap_dir + f"/dicts_{epoch}"
+            metrics_faiss.start_run()
             queries_mmap_base = mmap_dir + f"/queries_{epoch}"
             queries_mmap_path, queries_meta = biosyn.embed_names_mmap(names=names_in_train_queries, memap_path_base=queries_mmap_base)
-
+            metrics_faiss.log_event("embed dense", epoch)
             # save the index if we want after
+            #if you want to save the embedings in mmap file, do dict_mmap_base=dict_mmap_base
+            build_index_t0 = time.time()
             faiss_index = biosyn.build_faiss_index(dict_names=names_in_train_dict)
+            metrics_faiss.log_event("built index", epoch, t0=build_index_t0)
 
 
             # dtype = np.float16 if dict_meta["dtype"] == "fp16" else np.float32
             # dict_mm = np.memmap(dict_meta["path"], mode="r", dtype=dtype, shape=(dict_meta["N"], dict_meta["d"]))
             # model.set_dictionary_embedings(dict_mm)
 
-
+            search_index_t0 = time.time()
             results_mmap_base = mmap_dir + f"/results_{epoch}"
             train_dense_candidate_idxs = biosyn.search_index_mmap(queries_mmap_base=queries_mmap_base , save_results_mmap_base=results_mmap_base)
+            metrics_faiss.log_event("search index", epoch, t0=search_index_t0)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
 
 
@@ -289,9 +307,9 @@ def main():
             persistent_workers=args.use_cuda
         )
         # train_loss = train(data_loader=train_loader, model=model)
-        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16, epoch_num=epoch, pkls_dir=pkls_dir)
+        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16, epoch_num=epoch, pkls_dir=pkls_dir, metrics_train=metrics_train)
         # LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
-        metrics.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
+        metrics_train.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
 
         if args.save_checkpoint_all:
             checkpoint_dir = os.path.join(args.output_dir, "checkpoint_{}".format(epoch))
@@ -307,7 +325,7 @@ def main():
     training_minute = int(training_time/60 % 60)
     training_second = int(training_time % 60)
     LOGGER.info("Training Time!{} hours {} minutes {} seconds".format(training_hour, training_minute, training_second))
-    metrics.end_run()
+    metrics_train.end_run()
 
 
 if __name__ == "__main__":

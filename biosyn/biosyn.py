@@ -187,7 +187,7 @@ class BioSyn(object):
 
         N, H  = len(names), getattr(getattr(self.encoder, "config", None), "hidden_size", None)
         if return_tensor and self.use_cuda:
-            out = torch.empty((N,H), dtype=np.float16, device=self.device)
+            out = torch.empty((N,H), dtype=torch.float16 if self.has_fp16 else torch.float32, device=self.device)
         else:
             out = torch.empty((N,H), dtype=torch.float32, pin_memory=self.use_cuda)
 
@@ -259,11 +259,24 @@ class BioSyn(object):
         del mm
         return mmap_path, meta
 
-    def build_faiss_index(self, dict_names , batch_size=128_000):
+    def build_faiss_index(self, dict_names, dict_mmap_base=None , batch_size=128_000):
 
         # H is the hidden size of our encoder (usually 768)
         H = getattr(getattr(self.encoder, "config", None), "hidden_size", None)
         assert H is not None
+
+
+        #prepare mmap file for dict_embs
+        if dict_mmap_base:
+            dict_embs_shape = (len(dict_names),H)
+            dict_embs_mm_type_str = "fp16" if self.has_fp16 else "fp32"
+            dict_embs_dtype = np.float16 if dict_embs_mm_type_str == "fp16" else np.float32
+            os.makedirs(os.path.dirname(dict_mmap_base), exist_ok=True)
+            dict_embs_mm_path = dict_mmap_base + f".{dict_embs_mm_type_str}.mmap"
+            dict_embs_mm_meta = {"shape": dict_embs_shape, "dtype_str": dict_embs_mm_type_str, "path": dict_embs_mm_path}
+            with open(dict_mmap_base + ".json", "w") as f:
+                json.dump(dict_embs_mm_meta, f)
+            dict_embs_mm  = np.memmap(dict_embs_mm_path, mode="w+", dtype=dict_embs_dtype, shape=dict_embs_shape)
 
 
         #build main index
@@ -291,19 +304,31 @@ class BioSyn(object):
                 dict_names_embs = dict_names_embs.to("cpu").float().numpy()
 
             N = dict_names_embs.shape[0]
+            offset = 0
             with tqdm(total = len(dict_names) , desc="embeding & building FAISS index") as pbar:
                 #add dict names embeddings into the index in batches
                 for start in range(0, N, batch_size):
                     end = min(start + batch_size, N)
+                    chunk = dict_names_embs[start:end]
                     if self.use_cuda:
-                        chunk = dict_names_embs[start:end].contiguous()
-                    else:
-                        chunk = dict_names_embs[start:end]
+                        chunk = chunk.contiguous()
+
+                    if dict_mmap_base:
+                        if self.use_cuda:
+                            dict_embs_mm[offset: offset+(end-start)] = chunk.to("cpu", dtype=torch.float16 if self.has_fp16 else torch.float32).contiguous().numpy()
+                        else:
+                            dict_embs_mm[offset: offset+(end-start)] =chunk[start:end]
+
                     index.add(chunk)
+                    offset = end
 
                     pbar.update(end - start)
                     del chunk
+
             del dict_names_embs
+            if dict_mmap_base:
+                dict_embs_mm.flush()
+                del dict_embs_mm
 
         self.faiss_index = index
         return
