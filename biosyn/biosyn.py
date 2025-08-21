@@ -54,8 +54,8 @@ class BioSyn(object):
     def load_dense_encoder(self, model_name_path):
         self.encoder = AutoModel.from_pretrained(model_name_path, use_safetensors=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_path)
-        if self.use_cuda:
-            self.encoder = self.encoder.to("cuda")
+        # if self.use_cuda:
+            # self.encoder = self.encoder.to("cuda")
         return self.encoder, self.tokenizer
 
 
@@ -258,6 +258,31 @@ class BioSyn(object):
         mm.flush()
         del mm
         return mmap_path, meta
+
+
+
+    def encode_queries_with_keeping_graph(self, query_tokens):
+        """
+            query_tokens: dict with input_ids and attenntion mask, (batch_size, 1, max_length)
+                Sit in device
+                embed using encoder, taking cls of last hidden state, 
+                return, and it is important to NOT do .detach(); because we needs the graph for grad 
+            returns: query_embs of shape (batch_size, 1, hidden_size) with grad (keeping the graph)
+        """
+        # (batch_size, 1, max_length) => (batch_size, max_length)
+        query_inputs = query_tokens["input_ids"].squeeze(1).to(self.device, non_blocking=True)
+        query_attention_mask = query_tokens["attention_mask"].squeeze(1).to(self.device, non_blocking=True)
+
+        #last hidden state (batch_size, max_length, hidden)
+        query_embeddings_last_hidden = self.encoder(
+            input_ids = query_inputs,
+            attention_mask=query_attention_mask,
+            return_dict=False
+            )[0]
+        #(batch_size, hidden_size)
+        query_cls = query_embeddings_last_hidden[:, 0, :]
+        query_embeddings = query_cls.unsqueeze(1).contiguous()
+        return query_embeddings
 
     def build_faiss_index(self, dict_names, dict_mmap_base=None , batch_size=128_000):
 

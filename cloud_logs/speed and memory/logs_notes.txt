@@ -1,0 +1,31 @@
+All the follwoing  logs are for 1 epoch 
+
+1.txt: 
+    I tried this while doing the path of chunking and calc loss of the chunk immediately
+    it took the whole training 3mins.51sec (1epoch)
+
+2.txt: 
+    I try to do embedings outside the chunks loop, and then loop through chunks of candidates and calc embedings in model forward function and calculating the loss their 
+    In the other function, we are keeping the graphs of the returned query embedings, but when I do afterward the backward, the graph of candidates would be deleted, and the graphs of queries will stay there
+    I am using the candidate graphs inside the function of forward_chunk_losss but the query_embeddings is before the chunk so the graphs stays
+    Good for memory but slow
+	
+	batch_128 - forward chunk size= 96, 128  ==> OOM
+	forward chunk size = 48 => worked but still slow 
+	
+3.log:
+	I try to not do self.encoder.to("cuda") in biosyn load dense encoder 
+	increase the forward-chunk size = 60 => oom, 
+	log details, before the forward pass was 0.11s
+
+
+	['\n[epoch] forward chunk_loss pass | elapsed=0.11199s']
+	['\n[train] query all embeddings | elapsed=0.14163s | epoch=1', 
+	'\n[train] all chunks finished | elapsed=0.44835s | epoch=1',
+	 '\n[train] stepping batch | elapsed=0.01574s | epoch=1']
+
+From now on, we will use some args for testing fast:
+python train.py --draft --draft_prcntg=.1 --forward_chunk_size=48 
+
+
+ 

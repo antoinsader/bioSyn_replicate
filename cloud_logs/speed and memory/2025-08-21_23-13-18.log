@@ -1,0 +1,42 @@
+Logging file: ./data/otheres/logs/train/2025-08-21_23-13-18.log
+Using seed=0, pid=14995
+train_dictionary is loaded from file: ./data/data-ncbi-fair/train_dictionary.txt with minimize set to: False, the length is: 90599
+train_queries is loaded from file: ./data/data-ncbi-fair/traindev with minimize set to: False, the length is: 61763
+We are working on tier: gpu_l, gpu has native fp16 capability: True , num_workers=4
+Encoder loaded from: dmis-lab/biobert-base-cased-v1.1
+forward_chunk_size: 40
+Reranknet model is initiated with: learning_rate=1e-05,weight_decay=0.01, use_cuda=True 
+Candidate DS is initiated with len queries: 61763, len dicts: 90599, max_length: 25, topk: 20 
+The training will use faiss for score matrix
+Training will start at time: 1755818007.9135952 and with 1 epochs
+
+[train] START
+
+[epoch] START
+
+[Memory at the first of epoch: 1]: GPU free=23247.8 MB / total=24109.1 MB
+
+[faiss] START
+
+[faiss] embed dense | elapsed=4.85765s | epoch=1 | CPU_RSS=1874.3 MB| GPU_alloc=422.1 MB (peak 3547.2) | GPU reserved 4532.0 MB (peak:  4532.0)
+
+[faiss] Index was built in time specified, and the memory used:  | elapsed=8.61676s | epoch=1 | CPU_RSS=2372.9 MB| GPU_alloc=422.1 MB (peak 4086.6) | GPU reserved 5312.0 MB (peak:  5312.0)
+
+[faiss] search index | elapsed=0.28955s | epoch=1 | CPU_RSS=2349.9 MB| GPU_alloc=422.1 MB (peak 4086.6) | GPU reserved 5312.0 MB (peak:  5312.0)
+
+[Memory after finishing from faiss index]: GPU free=16647.8 MB / total=24109.1 MB
+
+[Memory at #epoch_1 before entering the data loader loop ]: GPU free=16647.8 MB / total=24109.1 MB
+Epoch num: 1 has did loss: 0.0
+Epoch 1 loss (running avg): 0.000000
+
+[epoch] epoch_end | elapsed=243.10079s | epoch=1 | loss=0.000000 | CPU_RSS=2508.8 MB| GPU_alloc=1673.9 MB (peak 18468.8) | GPU reserved 18704.0 MB (peak:  18704.0)
+[epoch] END | total=244.88s  | CPU_peak_RSS=2508.8 MB | GPU_peak_alloc=1673.9 MB | GPU_peak_reserved=2134.0 MB
+Training Time!0 hours 4 minutes 4 seconds
+[train] END | total=244.88s  | CPU_peak_RSS=0.0 MB | GPU_peak_alloc=1673.9 MB | GPU_peak_reserved=2134.0 MB
+
+
+['\n[epoch] forward chunk_loss pass | elapsed=0.11199s']
+['\n[train] query all embeddings | elapsed=0.14163s | epoch=1', 
+'\n[train] all chunks finished | elapsed=0.44835s | epoch=1',
+ '\n[train] stepping batch | elapsed=0.01574s | epoch=1']

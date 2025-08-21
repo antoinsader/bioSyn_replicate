@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import time
+from xmlrpc.client import Boolean
 
 import faiss
 from metric_logger import MetricsLogger
@@ -15,7 +16,13 @@ from torch.utils.data import DataLoader
 import numpy as np
 
 
+
+# use tf32 for float32 ops
+torch.backends.cuda.matmul.allow_tf32=True
+torch.backends.cudnn.allow_tf32 = True
+
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 
 MINIMIZE = False
 TOP_K = 20
@@ -89,7 +96,8 @@ def parse_args():
 
     parser.add_argument('--not_use_faiss',  action="store_true", default=NOT_USE_FAISS)
     parser.add_argument('--pre_tokenize',  action="store_true", default=PRE_TOKENIZE)
-    parser.add_argument('--forward_chunk_size', default=64, type=int)
+    parser.add_argument('--forward_chunk_size', default=128, type=int)
+    parser.add_argument('--draft_prcntg', default=.5, type=float)
 
 
     args = parser.parse_args()
@@ -113,51 +121,141 @@ def train(data_loader, model):
     train_loss /= (train_steps + 1e-9)
     return train_loss
 
-def train_new(data_loader, model, has_fp16, epoch_num, metrics_train, pkls_dir=None):
-    if model.use_cuda and has_fp16:
-        scaler = torch.amp.GradScaler('cuda')
+def train_new(data_loader, model,  epoch_num, biosyn,metrics_train, pkls_dir=None):
+    # saved_batches = []
+    use_cuda = model.use_cuda
+    use_fp16 = False
+
+    amp_dtype = torch.float16 if use_fp16 else torch.bfloat16
+    scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
+
+    use_amp = use_cuda
+
+
+    model.train()
     train_loss = 0
     train_steps = 0
-    model.train()
 
-    saved_batches = []
+
+    metrics_train.show_gpu_memory(f"Memory at #epoch_{epoch_num} before entering the data loader loop ")
 
     for i, data in tqdm(enumerate(data_loader), total=len(data_loader), desc="training", unit="epochs"):
-        model.optimizer.zero_grad()
         batch_x, batch_y = data
-        if has_fp16 and model.use_cuda:
-            with torch.amp.autocast('cuda'):
-                batch_pred = model(batch_x)
-                loss = model.get_loss(batch_pred, batch_y)
-            scaler.scale(loss).backward()
+        one_batch_all_start_time = time.time()
+        model.optimizer.zero_grad(set_to_none=True)
+
+        #other implementation:
+        #  For this, in old forward I was encoding query_embedings for each token, in other suggestion, 
+        #   I am computing query_embeddings once before and passing
+        # running = 0.0
+        # batch_size = batch_y.shape[0]
+        # forward_chunk_size = model.forward_chunk_size
+        # if has_fp16 and model.use_cuda:
+        #     for s in range(0, batch_size, forward_chunk_size):
+        #         e = min(s+forward_chunk_size , batch_size)
+        #         with torch.amp.autocast("cuda"):
+        #             loss_chunk = model.forward_chunk_loss(batch_x, batch_y, s, e)
+        #             loss_chunk = loss_chunk * ((e-s) / batch_size)
+        #         running += float(loss_chunk.detach())
+        #         scaler.scale(loss_chunk).backward()
+        #     scaler.step(model.optimizer)
+        #     scaler.update() 
+        # train_loss += running
+        # train_steps += 1
+
+
+        #this blows oom
+            # ...
+            #     batch_pred = model(batch_x)
+            #     loss = model.get_loss(batch_pred, batch_y)
+            # ...
+        #embed queries with keeping the grpahs all once
+        queries_tokens, cands_tokens = batch_x
+        batch_size = batch_y.shape[0]
+        chunk_size = model.forward_chunk_size
+
+        loss_chunk_all = 0.0
+        query_embs_start = time.time()
+        # encode with low-precision but keep loss in fp32 later
+        with torch.autocast("cuda", dtype=amp_dtype, enabled=use_cuda):
+            query_embeddings = biosyn.encode_queries_with_keeping_graph(queries_tokens)
+        metrics_train.log_event("query all embeddings", epoch=epoch_num,  t0=query_embs_start, log_immediate=False,  only_elapsed_time=True, first_iteration_only=True)
+
+        embed_cands_start = time.time()
+        #embed candidates in chunks
+        for start in range(0, batch_size, chunk_size):
+            """
+            What gets freed each iteration?
+                The candidate activations/graph for the current chunk are released right after its .backward().
+                The query graph persists (because of retain_graph=True) until you backprop the final chunk.
+            """
+            end =min(start+chunk_size, batch_size)
+            if use_amp:
+                with torch.amp.autocast("cuda", dtype=amp_dtype):
+                    loss_chunk = model.forward_chunk_loss(
+                        candidate_tokens=cands_tokens,
+                        targets_chunk=batch_y[start:end],
+                        start=start,
+                        end=end,
+                        query_embeddings_chunk=query_embeddings[start:end]
+                    )
+
+                chunky_loss_weight = (end - start ) / batch_size
+                loss_chunk = loss_chunk * chunky_loss_weight
+                # we don't need the graphs just here so we detach and we moved to float32
+                loss_chunk_all += float(loss_chunk.detach())
+                
+            else:
+                # loss_chunk = model.chunk
+                print("NOT USING AMP!")
+                break
+            
+            #keep the shared query graph alive until last chunk
+            #we retain the autograd graphs because graph of query_embeddings is shared by all 
+            retain = end < batch_size
+            if use_fp16:
+                scaler.scale(loss_chunk).backward(retain_graph=retain)
+            else: #bf16, no sclaer
+                loss_chunk.backward(retain_graph=retain)
+ 
+        metrics_train.log_event("all chunks finished", epoch=epoch_num,  t0=embed_cands_start, log_immediate=False,  only_elapsed_time=True, first_iteration_only=True)
+        del embed_cands_start
+
+
+        stepping_start_time = time.time()
+
+
+        #step per batch
+        if use_fp16:
             scaler.step(model.optimizer)
             scaler.update()
         else:
-            batch_pred = model(batch_x)
-            loss = model.get_loss(batch_pred, batch_y)
-            loss.backward()
             model.optimizer.step()
-        train_loss += loss.item()
+
+        train_loss += loss_chunk_all
         train_steps += 1
+        metrics_train.log_event("stepping batch", epoch=epoch_num, t0=stepping_start_time, first_iteration_only=True, log_immediate=False,  only_elapsed_time=True)
+        del stepping_start_time
 
+        # if pkls_dir:
+            # with torch.no_grad():
+                # to_save = {
+                #     "epoch": epoch_num,
+                #     "y": batch_y.detach().cpu(),
+                #     "pred": batch_pred.detach().cpu(),
+                #     "x": batch_x
+                # }
+            # saved_batches.append(to_save)
 
-        if pkls_dir:
-            with torch.no_grad():
-                to_save = {
-                    "epoch": epoch_num,
-                    "y": batch_y.detach().cpu(),
-                    "pred": batch_pred.detach().cpu(),
-                    "x": batch_x
-                }
-            saved_batches.append(to_save)
+        metrics_train.log_event("one batch all", epoch=epoch_num, t0=one_batch_all_start_time, first_iteration_only=True, log_immediate=False,  only_elapsed_time=True)
 
-
-    if pkls_dir:
-        save_pkl(saved_batches, pkls_dir + f"/epoch_{epoch_num}_results.pkl")
+    # if pkls_dir:
+        # save_pkl(saved_batches, pkls_dir + f"/epoch_{epoch_num}_results.pkl")
 
 
     LOGGER.info(f"Epoch num: {epoch_num} has did loss: {train_loss}")
-    train_loss /= (train_steps + 1e-9)
+    LOGGER.info(f"Epoch {epoch_num} loss (running avg): {train_loss / max(1, train_steps):.6f}")
+    train_loss /= max(1, train_steps)
     return train_loss
     
 
@@ -176,8 +274,10 @@ def main():
 
 
     if args.draft:
-        train_dictionary = train_dictionary[:100]
-        train_queries = train_queries[:10]
+        dict_size =int(args.draft_prcntg * len(train_dictionary))
+        query_size =int(args.draft_prcntg * len(train_queries))
+        train_dictionary = train_dictionary[:dict_size]
+        train_queries = train_queries[:query_size]
         args.output_dir = args.output_dir + "_min"
 
 
@@ -203,7 +303,7 @@ def main():
 
 
     LOGGER.info(f"train_dictionary is loaded from file: {args.train_dictionary_path} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_dictionary)}")
-    LOGGER.info(f"train_queries is loaded from file: {args.train_dir} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_queries)}")
+    LOGGER.info(f"train_queries is loaded from file: {args.train_dir} with minimize set to: {'True' if args.draft else 'False'}, the length is: {len(train_queries)}, draft percentage: {args.draft_prcntg}")
 
 
     save_pkl(train_dictionary, f"{pkls_dir}/train_dictionary.pkl")
@@ -218,6 +318,11 @@ def main():
         use_cuda=args.use_cuda,
         tag="train"
     )
+    metrics_epoch = MetricsLogger(
+        logger=LOGGER,
+        use_cuda=args.use_cuda,
+        tag="epoch"
+    )
     metrics_faiss = MetricsLogger(
         logger=LOGGER,
         use_cuda=args.use_cuda,
@@ -230,6 +335,7 @@ def main():
     biosyn = BioSyn(args.max_length, args.use_cuda, args.topk, args.model_name_or_path)
     LOGGER.info(f"We are working on tier: {biosyn.gpu_tier}, gpu has native fp16 capability: {biosyn.has_fp16} , num_workers={biosyn.num_workers}")
     LOGGER.info(f"Encoder loaded from: {args.model_name_or_path}")
+    LOGGER.info(f"forward_chunk_size: {args.forward_chunk_size}")
 
     model = RerankNet(
         encoder=biosyn.encoder,
@@ -237,7 +343,6 @@ def main():
         weight_decay=args.weight_decay,
         use_cuda=args.use_cuda,
         forward_chunk_size=args.forward_chunk_size,
-        metrics_train=metrics_train,
     )
     LOGGER.info(f"Reranknet model is initiated with: learning_rate={args.learning_rate},weight_decay={args.weight_decay}, use_cuda={args.use_cuda} ")
 
@@ -258,7 +363,9 @@ def main():
     metrics_train.start_run()
     for epoch in tqdm(range(1,args.epoch+1)):
         t_epoch = time.time()
-
+        metrics_epoch.start_run()
+        metrics_epoch.show_gpu_memory(f"Memory at the first of epoch: {epoch}")
+        model.metrics =metrics_epoch
 
         if args.not_use_faiss:
             query_embs = biosyn.embed_dense(names=names_in_train_queries)
@@ -285,7 +392,7 @@ def main():
             #if you want to save the embedings in mmap file, do dict_mmap_base=dict_mmap_base
             build_index_t0 = time.time()
             faiss_index = biosyn.build_faiss_index(dict_names=names_in_train_dict)
-            metrics_faiss.log_event("built index", epoch, t0=build_index_t0)
+            metrics_faiss.log_event("Index was built in time specified, and the memory used: ", epoch, t0=build_index_t0)
 
 
             # dtype = np.float16 if dict_meta["dtype"] == "fp16" else np.float32
@@ -297,19 +404,25 @@ def main():
             train_dense_candidate_idxs = biosyn.search_index_mmap(queries_mmap_base=queries_mmap_base , save_results_mmap_base=results_mmap_base)
             metrics_faiss.log_event("search index", epoch, t0=search_index_t0)
             train_set.set_dense_candidate_idxs(train_dense_candidate_idxs)
-
+            metrics_train.show_gpu_memory("Memory after finishing from faiss index")
 
         train_loader = DataLoader(
             train_set, batch_size=args.train_batch_size, 
             shuffle=False,
-            num_workers=min(4, (os.cpu_count() // 2 or 2)),
+            num_workers=min(8, (os.cpu_count() or 8)),
             pin_memory=args.use_cuda,
-            persistent_workers=args.use_cuda
+            persistent_workers=args.use_cuda,
+            prefetch_factor=4
         )
         # train_loss = train(data_loader=train_loader, model=model)
-        train_loss = train_new(data_loader=train_loader, model=model, has_fp16=biosyn.has_fp16, epoch_num=epoch, pkls_dir=pkls_dir, metrics_train=metrics_train)
+        train_loss = train_new(
+            data_loader=train_loader, 
+            model=model, 
+            epoch_num=epoch, 
+            metrics_train=metrics_train,
+            biosyn=biosyn)
         # LOGGER.info(f'We are in epoch number: {epoch}, we have training loss {train_loss}')
-        metrics_train.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
+        metrics_epoch.log_event("epoch_end", epoch=epoch, loss=train_loss, t0=t_epoch)
 
         if args.save_checkpoint_all:
             checkpoint_dir = os.path.join(args.output_dir, "checkpoint_{}".format(epoch))
@@ -319,6 +432,10 @@ def main():
 
         if epoch == args.epoch:
             biosyn.save_model(args.output_dir)
+        
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        metrics_epoch.end_run()
     end = time.time()
     training_time = end-start
     training_hour = int(training_time/60/60)

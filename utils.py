@@ -49,6 +49,10 @@ def marginal_nll(score, target):
     """
     sum all scores among positive samples
     """
+    score = score.float()
+    target = target.float()
+    
+    
     predict = F.softmax(score, dim=-1)
     loss = predict * target
     loss = loss.sum(dim=-1)                   # sum all positive scores

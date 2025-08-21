@@ -1,0 +1,38 @@
+Logging file: ./data/otheres/logs/train/2025-08-21_22-44-24.log
+Using seed=0, pid=5300
+train_dictionary is loaded from file: ./data/data-ncbi-fair/train_dictionary.txt with minimize set to: False, the length is: 90599
+train_queries is loaded from file: ./data/data-ncbi-fair/traindev with minimize set to: False, the length is: 61763
+We are working on tier: gpu_l, gpu has native fp16 capability: True , num_workers=4
+Encoder loaded from: dmis-lab/biobert-base-cased-v1.1
+forward_chunk_size: 48
+Reranknet model is initiated with: learning_rate=1e-05,weight_decay=0.01, use_cuda=True 
+Candidate DS is initiated with len queries: 61763, len dicts: 90599, max_length: 25, topk: 20 
+The training will use faiss for score matrix
+Training will start at time: 1755816273.7445629 and with 1 epochs
+
+[train] START
+
+[epoch] START
+
+[Memory at the first of epoch: 1]: GPU free=23247.8 MB / total=24109.1 MB
+
+[faiss] START
+
+[faiss] embed dense | epoch=1 | CPU_RSS=1873.6 MB| GPU_alloc=422.1 MB (peak 3547.2) | GPU reserved 4532.0 MB (peak:  4532.0) | elapsed=4.88s
+
+[faiss] Index was built in time specified, and the memory used:  | epoch=1 | CPU_RSS=2369.8 MB| GPU_alloc=422.1 MB (peak 4086.6) | GPU reserved 5312.0 MB (peak:  5312.0) | elapsed=8.61s
+
+[faiss] search index | epoch=1 | CPU_RSS=2347.1 MB| GPU_alloc=422.1 MB (peak 4086.6) | GPU reserved 5312.0 MB (peak:  5312.0) | elapsed=0.29s
+
+[Memory after finishing from faiss index]: GPU free=16647.8 MB / total=24109.1 MB
+
+[Memory at #epoch_1 before entering the data loader loop ]: GPU free=16647.8 MB / total=24109.1 MB
+Epoch num: 1 has did loss: 0.0
+Epoch 1 loss (running avg): 0.000000
+
+[epoch] epoch_end | epoch=1 | loss=0.000000 | CPU_RSS=2483.3 MB| GPU_alloc=1667.5 MB (peak 21511.4) | GPU reserved 21778.0 MB (peak:  21778.0) | elapsed=250.14s
+['\n[epoch] forward pass | CPU_RSS=2436.2 MB| GPU_alloc=10745.4 MB (peak 11059.0) | GPU reserved 11118.0 MB (peak:  11118.0) | elapsed=0.11s']
+[epoch] END | total=251.93s  | CPU_peak_RSS=2483.3 MB | GPU_peak_alloc=1667.5 MB | GPU_peak_reserved=2060.0 MB
+Training Time!0 hours 4 minutes 11 seconds
+[]
+[train] END | total=251.93s  | CPU_peak_RSS=0.0 MB | GPU_peak_alloc=1667.5 MB | GPU_peak_reserved=2060.0 MB

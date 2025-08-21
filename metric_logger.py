@@ -1,6 +1,8 @@
 import os, time, csv, json, logging, psutil, torch
 
-
+class METRIC_EVENT:
+    pass
+# FOR FUTURE
 
 class MetricsLogger:
     def __init__(self, use_cuda, logger, tag="train"):
@@ -12,6 +14,7 @@ class MetricsLogger:
         self.logger = logger
         self.tag =tag
         self.messages = []
+        self.one_time_events_set = set()
     def _rss_mb(self):
         rss = self.proc.memory_info().rss / (1024 ** 2)
         self.max_rss_mb = max(self.max_rss_mb, rss)
@@ -29,29 +32,63 @@ class MetricsLogger:
         self.start_ts = time.time()
         if self.use_cuda:
             torch.cuda.reset_peak_memory_stats(self.device)
-        self.logger.info(f"[{self.tag}] START")
+        self.logger.info(f"\n[{self.tag}] START")
 
-    def log_event(self, event, epoch=None, loss=None, t0= None):
+
+    def show_gpu_memory(self, event):
+        free = torch.cuda.mem_get_info()[0] / 1024**2   # free memory in MB
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**2
+        self.logger.info(f"\n[{event}]: GPU free={free:.1f} MB / total={total:.1f} MB")
+
+
+    def log_event(self, event, epoch=None, loss=None, t0= None, log_immediate=True, first_iteration_only=True, only_elapsed_time=False):
+        if first_iteration_only and event in self.one_time_events_set:
+            return True
+
+        self.one_time_events_set.add(event)
         if self.start_ts is None:
             self.start_ts = time.time()
+
         wall = (time.time() - (t0 if t0 is not None else self.start_ts))
-        rss = self._rss_mb()
-        g_alloc, g_peak, g_res, g_res_peak  = self._gpu_numbers()
+
         msg = f"[{self.tag}] {event}"
+        msg += f" | elapsed={wall:.5f}s({'t0 is calculated' if t0 else "t0 not calculated"})"
         if epoch is not None:
             msg += f" | epoch={epoch}"
+
+        if only_elapsed_time:
+            if log_immediate:
+                self.logger.info(f"\n{msg}")
+            else:
+                self.messages.append(f"{msg}")
+            
+            return
+
+
+        rss = self._rss_mb()
+        g_alloc, g_peak, g_res, g_res_peak  = self._gpu_numbers()
+        
+
+        
         if loss is not None:
             msg += f" | loss={loss:.6f}"
+        
         msg += f" | CPU_RSS={rss:.1f} MB"
         if self.use_cuda:
             msg += f"| GPU_alloc={g_alloc:.1f} MB (peak {g_peak:.1f}) | GPU reserved {g_res:.1f} MB (peak: {g_res_peak: .1f})" 
-        msg += f" | elapsed={wall:.2f}s"
-        self.messages.append(msg)
+        
+        if log_immediate:
+            self.logger.info(f"\n{msg}")
+        else:
+            self.messages.append(f"{msg}")
 
 
     def end_run(self):
         total = time.time() - self.start_ts if self.start_ts else 0.0
-        self.logger.info(self.messages)
+        self.logger.info(f"\n\n***************ONE TIME MESSAGES:***************\n\n")
+        for m in self.messages:
+            self.logger.info(f"\n{m}")
+        self.logger.info(f"\n\n***************END ONE TIME MESSAGES:***************\n\n")
         
          # read final GPU peaks (since start_run)
         _, g_peak, _, g_res_peak = self._gpu_numbers()
