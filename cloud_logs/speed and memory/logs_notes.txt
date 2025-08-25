@@ -16,7 +16,7 @@ All the follwoing  logs are for 1 epoch
 3.log:
 	I try to not do self.encoder.to("cuda") in biosyn load dense encoder 
 	increase the forward-chunk size = 60 => oom, 
-	log details, before the forward pass was 0.11s
+	log details 2,  the forward pass  was 0.11s
 
 
 	['\n[epoch] forward chunk_loss pass | elapsed=0.11199s']

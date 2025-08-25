@@ -52,7 +52,12 @@ class BioSyn(object):
 
 
     def load_dense_encoder(self, model_name_path):
-        self.encoder = AutoModel.from_pretrained(model_name_path, use_safetensors=True)
+        #we disabled pooling layer because we are using only [cls]
+        self.encoder = AutoModel.from_pretrained(
+            model_name_path, 
+            use_safetensors=True,
+            add_pooling_layer=False
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_path)
         # if self.use_cuda:
             # self.encoder = self.encoder.to("cuda")
